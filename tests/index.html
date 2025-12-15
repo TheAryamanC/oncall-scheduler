@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scheduler Test Suite</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        h1 {
+            color: #4E2A84;
+        }
+        .btn {
+            background: #4E2A84;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        .btn:hover {
+            background: #6b3fa0;
+        }
+        .btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        #output {
+            background: #0d0d1a;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            white-space: pre-wrap;
+            max-height: 600px;
+            overflow-y: auto;
+            margin-top: 20px;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+        .pass { color: #22c55e; }
+        .fail { color: #ef4444; }
+        .info { color: #60a5fa; }
+        .summary {
+            background: #2a2a4a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .summary h3 { margin-top: 0; }
+        #progress {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>OnCall Scheduler Test Suite</h1>
+    
+    <p>This test suite verifies shift distribution fairness across various configurations:</p>
+    <ul>
+        <li>Team sizes: 5, 8, 10, 15, 20, 30, 50</li>
+        <li>Date ranges: 1 week to 12 months</li>
+        <li>Shift counts: 1-10 primary/secondary per night</li>
+    </ul>
+    
+    <div>
+        <button class="btn" id="quickTestBtn" onclick="runQuickTestUI()">Quick Test (10 configs)</button>
+        <button class="btn" id="fullTestBtn" onclick="runAllTestsUI()">Full Test Suite</button>
+        <button class="btn" id="notPreferredBtn" onclick="testAllNotPreferredUI()">Test: All Not Preferred</button>
+        <button class="btn" onclick="clearOutput()">Clear Output</button>
+    </div>
+    
+    <div id="progress"></div>
+    
+    <div id="summary" class="summary" style="display: none;">
+        <h3>Test Results</h3>
+        <p>Passed: <span id="passedCount" class="pass">0</span></p>
+        <p>Failed: <span id="failedCount" class="fail">0</span></p>
+    </div>
+    
+    <div id="output"></div>
+
+    <script src="../scheduler.js"></script>
+    <script src="scheduler.test.js"></script>
+    <script>
+        const outputEl = document.getElementById('output');
+        const progressEl = document.getElementById('progress');
+        const summaryEl = document.getElementById('summary');
+        
+        // Override console.log to display in the output div
+        const originalLog = console.log;
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            const text = args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : a).join(' ');
+            
+            let colorClass = '';
+            if (text.includes('[PASS]')) colorClass = 'pass';
+            else if (text.includes('[FAIL]')) colorClass = 'fail';
+            else if (text.includes('===')) colorClass = 'info';
+            
+            outputEl.innerHTML += `<span class="${colorClass}">${escapeHtml(text)}</span>\n`;
+            outputEl.scrollTop = outputEl.scrollHeight;
+        };
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function clearOutput() {
+            outputEl.innerHTML = '';
+            summaryEl.style.display = 'none';
+            progressEl.textContent = '';
+        }
+        
+        function disableButtons(disabled) {
+            document.getElementById('quickTestBtn').disabled = disabled;
+            document.getElementById('fullTestBtn').disabled = disabled;
+            document.getElementById('notPreferredBtn').disabled = disabled;
+        }
+        
+        function showSummary(results) {
+            document.getElementById('passedCount').textContent = results.passed;
+            document.getElementById('failedCount').textContent = results.failed;
+            summaryEl.style.display = 'block';
+        }
+        
+        async function runQuickTestUI() {
+            clearOutput();
+            disableButtons(true);
+            progressEl.textContent = 'Running quick tests...';
+            
+            await new Promise(r => setTimeout(r, 100));
+            const results = runQuickTest();
+            
+            showSummary(results);
+            progressEl.textContent = 'Quick test complete!';
+            disableButtons(false);
+        }
+        
+        async function runAllTestsUI() {
+            clearOutput();
+            disableButtons(true);
+            progressEl.textContent = 'Running full test suite (this may take a while)...';
+            
+            await new Promise(r => setTimeout(r, 100));
+            const results = runAllTests();
+            
+            showSummary(results);
+            progressEl.textContent = 'Full test suite complete!';
+            disableButtons(false);
+        }
+        
+        async function testAllNotPreferredUI() {
+            clearOutput();
+            disableButtons(true);
+            progressEl.textContent = 'Testing all-not-preferred scenario...';
+            
+            await new Promise(r => setTimeout(r, 100));
+            const passed = testAllNotPreferred();
+            
+            showSummary({ passed: passed ? 1 : 0, failed: passed ? 0 : 1 });
+            progressEl.textContent = 'Test complete!';
+            disableButtons(false);
+        }
+    </script>
+</body>
+</html>

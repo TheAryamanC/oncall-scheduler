@@ -1,5 +1,6 @@
-// Main scheduler instance
-let scheduler = new OnCallScheduler();
+// Main scheduler instance - exposed on window for cross-script access
+window.scheduler = new OnCallScheduler();
+const scheduler = window.scheduler;
 
 // FullCalendar instance for the calendar view
 let calendar = null;

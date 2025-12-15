@@ -146,49 +146,53 @@ class OnCallScheduler {
     }
 
     // Calculate cost for assigning a person to a slot - lower is better
-    calculateCost(person, slot, currentLoad) {
+    calculateCost(person, slot, currentLoad, targets) {
         let cost = 0;
         const prefs = this.preferences.get(person.email);
         const load = currentLoad.get(person.email);
-
-        // Preference cost: preferred = 0, neutral = 10
-        if (prefs && prefs.preferred.has(slot.dateStr)) {
-            cost += 0;
-        } else {
-            cost += 10;
-        }
-
-        // Calculate average load across all RAs for fairness comparison
-        const avgLoad = this.calculateAverageLoad(currentLoad);
-        
-        // Get this RA's current count for this specific shift type
         const shiftType = this.getShiftTypeKey(slot);
         const personCount = load[shiftType];
-        const avgCount = avgLoad[shiftType];
+        const target = targets ? targets[shiftType] : null;
         
-        // STRICT FAIRNESS ENFORCEMENT: Very heavy penalties/bonuses for ALL shift types
-        // This ensures equal distribution across weekday_primary, weekday_secondary,
-        // weekend_primary, and weekend_secondary regardless of preferences
+        // FAIRNESS IS THE PRIMARY FACTOR
+        // The cost is primarily based on how many shifts this person already has
+        // in this category - people with fewer shifts get MUCH lower costs
         
-        // Massive penalty if above average for this shift type (forces equal distribution)
-        if (personCount > avgCount) {
-            cost += (personCount - avgCount) * 200;
+        if (target) {
+            // Very heavy penalty if at or above max (effectively blocks them)
+            if (personCount >= target.max) {
+                cost += 100000;
+            } else {
+                // Primary cost = current count * 1000
+                // This means someone with 0 shifts has cost 0, 
+                // someone with 1 shift has cost 1000, etc.
+                // This DOMINATES all other factors
+                cost += personCount * 1000;
+                
+                // Additional penalty if at or above minimum (others should catch up)
+                if (personCount >= target.min && target.min > 0) {
+                    cost += 500;
+                }
+            }
         }
         
-        // Strong bonus if below average for this shift type (prioritizes catching up)
-        if (personCount < avgCount) {
-            cost -= (avgCount - personCount) * 100;
+        // Secondary factor: preference (much smaller impact than fairness)
+        // Only matters when comparing people with same shift count
+        if (prefs && prefs.preferred.has(slot.dateStr)) {
+            cost -= 5;
+        } else if (prefs && prefs.notPreferred.has(slot.dateStr)) {
+            cost += 10;
         }
         
-        // Additional small base cost for weekend shifts
+        // Small base cost for weekend shifts (tie-breaker)
         if (slot.isWeekend) {
-            cost += 5;
+            cost += 2;
         }
 
-        // Very heavy penalty for same-day double assignment (should be avoided)
+        // Huge penalty for same-day double assignment
         const sameDayShifts = this.getSameDayShifts(person, slot);
         if (sameDayShifts.length > 0) {
-            cost += 1000;
+            cost += 1000000;
         }
 
         return cost;
@@ -249,6 +253,37 @@ class OnCallScheduler {
         );
     }
 
+    // Calculate target shifts per person for each category
+    calculateTargetShifts() {
+        const dates = this.generateDates();
+        const weekdayCount = dates.filter(d => !this.isWeekendNight(d)).length;
+        const weekendCount = dates.filter(d => this.isWeekendNight(d)).length;
+        const n = this.people.length;
+        
+        return {
+            weekday_primary: {
+                total: weekdayCount * this.primaryCount,
+                min: Math.floor((weekdayCount * this.primaryCount) / n),
+                max: Math.ceil((weekdayCount * this.primaryCount) / n)
+            },
+            weekend_primary: {
+                total: weekendCount * this.primaryCount,
+                min: Math.floor((weekendCount * this.primaryCount) / n),
+                max: Math.ceil((weekendCount * this.primaryCount) / n)
+            },
+            weekday_secondary: {
+                total: weekdayCount * this.secondaryCount,
+                min: Math.floor((weekdayCount * this.secondaryCount) / n),
+                max: Math.ceil((weekdayCount * this.secondaryCount) / n)
+            },
+            weekend_secondary: {
+                total: weekendCount * this.secondaryCount,
+                min: Math.floor((weekendCount * this.secondaryCount) / n),
+                max: Math.ceil((weekendCount * this.secondaryCount) / n)
+            }
+        };
+    }
+
     // Main scheduling function
     generateSchedule() {
         const totalSlotsPerDay = this.primaryCount + this.secondaryCount;
@@ -271,6 +306,9 @@ class OnCallScheduler {
         // Initialize load tracking
         const currentLoad = this.initializeLoad();
         
+        // Calculate target shifts for fairness enforcement
+        const targets = this.calculateTargetShifts();
+        
         // Clear previous schedule
         this.schedule = [];
 
@@ -287,37 +325,31 @@ class OnCallScheduler {
 
         // Assign each slot
         for (const slot of slots) {
-            // Get candidates who marked this date as available (not in notPreferred)
-            let candidates = this.people.filter(p => this.canAssign(p, slot));
+            const shiftTypeKey = this.getShiftTypeKey(slot);
+            const target = targets[shiftTypeKey];
             
-            // STRICT FAIRNESS: For ALL shift types, include people who marked the date
-            // as "not preferred" if they are BELOW average for this specific shift type.
-            // This ensures equal distribution across all four categories:
-            // weekday_primary, weekday_secondary, weekend_primary, weekend_secondary
-            if (candidates.length < this.people.length) {
-                const avgLoad = this.calculateAverageLoad(currentLoad);
-                const shiftTypeKey = this.getShiftTypeKey(slot);
+            // Build candidate list: Start with people who prefer or are neutral
+            // Build candidate list with STRICT FAIRNESS enforcement
+            // Everyone below their minimum target MUST be included regardless of preferences
+            let candidates = this.people.filter(p => {
+                const load = currentLoad.get(p.email);
                 
-                for (const person of this.people) {
-                    // Skip if already a candidate
-                    if (candidates.find(c => c.email === person.email)) continue;
-                    
-                    // Skip if already has a shift on this day
-                    const sameDayShifts = this.getSameDayShifts(person, slot);
-                    if (sameDayShifts.length > 0) continue;
-                    
-                    // Include if below average on this specific shift type
-                    const load = currentLoad.get(person.email);
-                    if (load[shiftTypeKey] < avgLoad[shiftTypeKey]) {
-                        candidates.push(person);
-                    }
-                }
-            }
+                // Skip if already at max for this shift type
+                if (load[shiftTypeKey] >= target.max) return false;
+                
+                // Skip if already has a shift on this day
+                const sameDayShifts = this.getSameDayShifts(p, slot);
+                if (sameDayShifts.length > 0) return false;
+                
+                // ALWAYS include if below minimum (regardless of preferences)
+                if (load[shiftTypeKey] < target.min) return true;
+                
+                // Include if not marked as not-preferred (and at or above minimum)
+                return this.canAssign(p, slot);
+            });
             
-            // REQUIRED COVERAGE: If no one is available, we MUST still fill the slot
+            // Last resort: if no candidates, take anyone without a shift today
             if (candidates.length === 0) {
-                console.warn(`No preferred candidates for slot ${slot.id} - using fallback for required coverage`);
-                
                 candidates = this.people.filter(p => {
                     const sameDayShifts = this.getSameDayShifts(p, slot);
                     return sameDayShifts.length === 0;
@@ -329,24 +361,41 @@ class OnCallScheduler {
                     );
                 }
                 
-                // Mark that this assignment was forced despite preferences
                 slot.warning = 'Assigned despite unavailable date - required coverage';
             }
 
-            // Rank candidates by cost (lower is better)
-            const rankedCandidates = candidates.map(person => ({
-                person,
-                cost: this.calculateCost(person, slot, currentLoad)
-            })).sort((a, b) => a.cost - b.cost);
+            // FAIRNESS-FIRST SELECTION
+            // Step 1: Find the minimum shift count for this category among candidates
+            const minShiftCount = Math.min(...candidates.map(p => 
+                currentLoad.get(p.email)[shiftTypeKey]
+            ));
+            
+            // Step 2: ONLY consider candidates at the minimum shift count
+            // This ensures fairness - we MUST give shifts to those who have fewer
+            let fairCandidates = candidates.filter(p => 
+                currentLoad.get(p.email)[shiftTypeKey] === minShiftCount
+            );
+            
+            // Step 3: Among the fair candidates, rank by preference (secondary factor)
+            const rankedCandidates = fairCandidates.map(person => {
+                const prefs = this.preferences.get(person.email);
+                let prefCost = 0;
+                if (prefs && prefs.preferred.has(slot.dateStr)) {
+                    prefCost = -5;
+                } else if (prefs && prefs.notPreferred.has(slot.dateStr)) {
+                    prefCost = 10;
+                }
+                return { person, cost: prefCost };
+            }).sort((a, b) => a.cost - b.cost);
 
             let best;
             
-            // Find all candidates within a fairness threshold of the best cost
+            // Find all candidates within a small threshold (preference is secondary)
             const bestCost = rankedCandidates[0].cost;
-            const threshold = 15; // Allow some variance for randomness while maintaining fairness
+            const threshold = 20; // Wider threshold since fairness is already handled
             const equallyGood = rankedCandidates.filter(c => c.cost <= bestCost + threshold);
             
-            // ALWAYS randomly select among equally good candidates
+            // Randomly select among equally good candidates
             // This ensures fairness when multiple people prefer the same date
             const randomIndex = Math.floor(Math.random() * equallyGood.length);
             best = equallyGood[randomIndex];
@@ -355,14 +404,13 @@ class OnCallScheduler {
             slot.cost = best.cost;
 
             const load = currentLoad.get(best.person.email);
-            const shiftType = this.getShiftTypeKey(slot);
-            load[shiftType]++;
+            load[shiftTypeKey]++;
             load.total_hours += slot.duration;
 
             this.schedule.push(slot);
         }
 
-        this.optimizeWithSwaps(currentLoad);
+        this.optimizeWithSwaps(currentLoad, targets);
 
         return {
             schedule: this.schedule,
@@ -370,8 +418,9 @@ class OnCallScheduler {
         };
     }
 
-    // Optimize schedule by attempting swaps to improve fairness
-    optimizeWithSwaps(currentLoad) {
+    // Optimize schedule by attempting swaps to improve PREFERENCE satisfaction
+    // CRITICAL: Never allow swaps that violate fairness (min/max constraints)
+    optimizeWithSwaps(currentLoad, targets) {
         const maxIterations = 100;
         let improved = true;
         let iterations = 0;
@@ -382,12 +431,32 @@ class OnCallScheduler {
 
             for (const slot of this.schedule) {
                 const currentPerson = slot.assignedPerson;
-                const currentCost = this.calculateCost(currentPerson, slot, currentLoad);
+                const shiftType = this.getShiftTypeKey(slot);
+                const target = targets[shiftType];
+                const currentPersonLoad = currentLoad.get(currentPerson.email);
+                
+                // FAIRNESS CHECK: Don't take shifts from someone at or below minimum
+                if (currentPersonLoad[shiftType] <= target.min) {
+                    continue; // Skip - can't take this shift away
+                }
+
+                const currentCost = this.calculateCost(currentPerson, slot, currentLoad, targets);
 
                 // Try swapping with each other RA
                 for (const person of this.people) {
                     if (person.email === currentPerson.email) continue;
-                    if (!this.canAssign(person, slot)) continue;
+                    
+                    const newPersonLoad = currentLoad.get(person.email);
+                    
+                    // FAIRNESS CHECK: Don't give more shifts to someone at or above max
+                    if (newPersonLoad[shiftType] >= target.max) {
+                        continue;
+                    }
+                    
+                    // Skip if preference strongly against (unless they need more shifts)
+                    if (!this.canAssign(person, slot) && newPersonLoad[shiftType] >= target.min) {
+                        continue;
+                    }
 
                     // Check for same-day conflicts
                     const sameDayShifts = this.schedule.filter(s => 
@@ -398,19 +467,15 @@ class OnCallScheduler {
                     );
                     if (sameDayShifts.length > 0) continue;
 
-                    const swapCost = this.calculateCost(person, slot, currentLoad);
+                    const swapCost = this.calculateCost(person, slot, currentLoad, targets);
 
                     // Only swap if significantly better (threshold of 20)
                     if (swapCost < currentCost - 20) {
                         // Update loads
-                        const oldLoad = currentLoad.get(currentPerson.email);
-                        const newLoad = currentLoad.get(person.email);
-                        const shiftType = this.getShiftTypeKey(slot);
-
-                        oldLoad[shiftType]--;
-                        oldLoad.total_hours -= slot.duration;
-                        newLoad[shiftType]++;
-                        newLoad.total_hours += slot.duration;
+                        currentPersonLoad[shiftType]--;
+                        currentPersonLoad.total_hours -= slot.duration;
+                        newPersonLoad[shiftType]++;
+                        newPersonLoad.total_hours += slot.duration;
 
                         slot.assignedPerson = person;
                         slot.cost = swapCost;
@@ -421,7 +486,7 @@ class OnCallScheduler {
             }
         }
 
-        console.log(`Optimization completed after ${iterations} iterations`);
+        // console.log(`Optimization completed after ${iterations} iterations`);
     }
 
     // Generate fairness report
@@ -647,5 +712,10 @@ class OnCallScheduler {
     }
 }
 
-// Export for use in browser
-window.OnCallScheduler = OnCallScheduler;
+// Export for use in browser and Node.js
+if (typeof window !== 'undefined') {
+    window.OnCallScheduler = OnCallScheduler;
+}
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { OnCallScheduler };
+}
