@@ -580,7 +580,7 @@ sessionManager.on('onPreferencesReceived', (data) => {
     updateSubmissionStatus();
     
     if (window.scheduler) {
-        scheduler.setPersonPreferences(data.email, data.preferred, data.unavailable);
+        window.scheduler.setPersonPreferences(data.email, data.preferred, data.unavailable);
         updatePreferenceSummary();
     }
 });

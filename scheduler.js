@@ -91,6 +91,17 @@ class OnCallScheduler {
         return String.fromCharCode(97 + index); // 97 = 'a'
     }
 
+    // Simple string hash function for deterministic rotation
+    hashString(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return Math.abs(hash);
+    }
+
     // Generate all slots to be filled
     generateSlots() {
         const dates = this.generateDates();
@@ -376,29 +387,37 @@ class OnCallScheduler {
                 currentLoad.get(p.email)[shiftTypeKey] === minShiftCount
             );
             
-            // Step 3: Among the fair candidates, rank by preference (secondary factor)
-            const rankedCandidates = fairCandidates.map(person => {
+            // Step 3: Sort fair candidates to ensure rotation
+            // Primary sort: preference (preferred dates first)
+            // Secondary sort: rotate based on shift type to prevent same-alphabet bias
+            // Use a combination of slot index and date to create rotation
+            const dateNum = parseInt(slot.dateStr.replace(/-/g, ''));
+            const slotNum = slot.slotIndex + (slot.role === 'primary' ? 0 : 100);
+            const rotationSeed = (dateNum + slotNum) % fairCandidates.length;
+            
+            const rankedCandidates = fairCandidates.map((person, originalIndex) => {
                 const prefs = this.preferences.get(person.email);
+                
+                // Preference cost
                 let prefCost = 0;
                 if (prefs && prefs.preferred.has(slot.dateStr)) {
                     prefCost = -5;
                 } else if (prefs && prefs.notPreferred.has(slot.dateStr)) {
                     prefCost = 10;
                 }
-                return { person, cost: prefCost };
-            }).sort((a, b) => a.cost - b.cost);
+                
+                // Rotation: shift the index based on the seed
+                const rotatedIndex = (originalIndex + rotationSeed) % fairCandidates.length;
+                
+                return { person, prefCost, rotatedIndex };
+            }).sort((a, b) => {
+                // Primary: preference
+                if (a.prefCost !== b.prefCost) return a.prefCost - b.prefCost;
+                // Secondary: rotated index for fair distribution
+                return a.rotatedIndex - b.rotatedIndex;
+            });
 
-            let best;
-            
-            // Find all candidates within a small threshold (preference is secondary)
-            const bestCost = rankedCandidates[0].cost;
-            const threshold = 20; // Wider threshold since fairness is already handled
-            const equallyGood = rankedCandidates.filter(c => c.cost <= bestCost + threshold);
-            
-            // Randomly select among equally good candidates
-            // This ensures fairness when multiple people prefer the same date
-            const randomIndex = Math.floor(Math.random() * equallyGood.length);
-            best = equallyGood[randomIndex];
+            const best = rankedCandidates[0];
             
             slot.assignedPerson = best.person;
             slot.cost = best.cost;

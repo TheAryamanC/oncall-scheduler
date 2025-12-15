@@ -6,3 +6,5 @@ Notes:
    - Unavailable dates are respected as best as possible - if everyone doesn't prefer a date, someone is randomly assigned
    - Preferred dates are prioritized as best as possible
    - Equal distribution of shift types are ensured as best as possible
+
+Found at: https://thearyamanc.github.io/oncall-scheduler/

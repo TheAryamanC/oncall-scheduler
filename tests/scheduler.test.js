@@ -1,8 +1,4 @@
-/**
- * Comprehensive test suite for OnCallScheduler
- * Tests team sizes 5-50, date ranges 1 week to 12 months, 1-10 primary/secondary per night
- * Verifies equal shift distribution across all four categories
- */
+// Test suite
 
 // Import scheduler (for Node.js testing)
 if (typeof require !== 'undefined') {
@@ -31,10 +27,7 @@ let testResults = {
     errors: []
 };
 
-/**
- * Generate random preferences for an RA
- * Some RAs will mark many dates as not preferred to test fairness enforcement
- */
+// Generate random preferences for a person
 function generateRandomPreferences(dates, allNotPreferred = false) {
     const preferred = [];
     const notPreferred = [];
@@ -57,10 +50,7 @@ function generateRandomPreferences(dates, allNotPreferred = false) {
     return { preferred, notPreferred };
 }
 
-/**
- * Check if shifts are fairly distributed (within acceptable variance)
- * For N people and M shifts: each person should have floor(M/N) or ceil(M/N) shifts
- */
+// Check fairness of shift distribution
 function checkFairness(shiftCounts, totalShifts, numPeople, shiftType) {
     const minExpected = Math.floor(totalShifts / numPeople);
     const maxExpected = Math.ceil(totalShifts / numPeople);
@@ -80,9 +70,7 @@ function checkFairness(shiftCounts, totalShifts, numPeople, shiftType) {
     return issues;
 }
 
-/**
- * Run a single scheduling test
- */
+// Run a single test configuration
 function runTest(config) {
     const { teamSize, weeks, primaryCount, secondaryCount, testName } = config;
     
@@ -178,9 +166,7 @@ function runTest(config) {
     }
 }
 
-/**
- * Run all test combinations
- */
+// Run all test combinations
 function runAllTests() {
     console.log('='.repeat(60));
     console.log('STARTING COMPREHENSIVE SCHEDULER TESTS');
@@ -268,9 +254,7 @@ function runAllTests() {
     return testResults;
 }
 
-/**
- * Run a quick smoke test (smaller subset)
- */
+// Run a quick smoke test with limited configurations
 function runQuickTest() {
     console.log('Running quick smoke test...\n');
     
@@ -308,9 +292,7 @@ function runQuickTest() {
     return testResults;
 }
 
-/**
- * Test specific scenario: Everyone marks all dates as not preferred
- */
+// Test case: All RAs mark all dates as not preferred
 function testAllNotPreferred() {
     console.log('\nTesting: All RAs mark all dates as not preferred\n');
     

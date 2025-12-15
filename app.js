@@ -212,6 +212,15 @@ function loadSetup() {
 
         scheduler.people = data.people || [];
         
+        // Initialize empty preferences for all loaded people first
+        for (const person of scheduler.people) {
+            scheduler.preferences.set(person.email, {
+                preferred: new Set(),
+                notPreferred: new Set()
+            });
+        }
+        
+        // Then load any saved preferences on top
         if (data.preferences) {
             for (const pref of data.preferences) {
                 scheduler.preferences.set(pref.email, {
@@ -384,37 +393,6 @@ function saveManualPreferences() {
     document.getElementById('manualUnavailable').value = '';
     
     alert(`Preferences saved for ${email}!\nPreferred: ${preferred.length} dates\nUnavailable: ${unavailable.length} dates`);
-}
-
-// Update the preference summary display
-function updatePreferenceSummary() {
-    const container = document.getElementById('preferenceSummary');
-    
-    if (scheduler.people.length === 0) {
-        container.innerHTML = '';
-        return;
-    }
-
-    const items = scheduler.people.map(person => {
-        const prefs = scheduler.preferences.get(person.email);
-        const preferredCount = prefs ? prefs.preferred.size : 0;
-        const notPreferredCount = prefs ? prefs.notPreferred.size : 0;
-        const hasPrefs = preferredCount > 0 || notPreferredCount > 0;
-
-        return `
-            <div class="preference-item">
-                <span>${escapeHtml(person.name)}</span>
-                <div class="preference-dates">
-                    ${hasPrefs ? `
-                        <span class="preferred-count">${preferredCount} preferred</span>
-                        <span class="not-preferred-count">${notPreferredCount} unavailable</span>
-                    ` : '<span class="muted">No preferences yet</span>'}
-                </div>
-            </div>
-        `;
-    }).join('');
-
-    container.innerHTML = `<h4>Preference Status:</h4>${items}`;
 }
 
 // Update the schedule preview statistics
