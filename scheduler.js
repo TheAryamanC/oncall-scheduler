@@ -158,13 +158,27 @@ class OnCallScheduler {
             cost += 10;
         }
 
-        // Weekend shifts have slightly higher cost to distribute them fairly
-        if (slot.isWeekend) {
-            cost += 5;
-        }
-
         // Calculate average load across all RAs for fairness comparison
         const avgLoad = this.calculateAverageLoad(currentLoad);
+
+        // Weekend fairness enforcement: heavily penalize assigning weekend shifts
+        // to people who already have more than average weekend shifts
+        if (slot.isWeekend) {
+            const weekendKey = slot.role === 'primary' ? 'weekend_primary' : 'weekend_secondary';
+            const personWeekendCount = load[weekendKey];
+            const avgWeekendCount = avgLoad[weekendKey];
+            
+            // Very heavy penalty if above average on weekends (forces equal distribution)
+            if (personWeekendCount > avgWeekendCount) {
+                cost += (personWeekendCount - avgWeekendCount) * 200;
+            }
+            // Strong bonus if below average on weekends (prioritizes catching up)
+            if (personWeekendCount < avgWeekendCount) {
+                cost -= (avgWeekendCount - personWeekendCount) * 100;
+            }
+            // Small base cost for weekends
+            cost += 5;
+        }
         
         // Get this RA's current count for this shift type
         const shiftType = this.getShiftTypeKey(slot);
@@ -285,9 +299,31 @@ class OnCallScheduler {
         for (const slot of slots) {
             // Get candidates who marked this date as available (not in notPreferred)
             let candidates = this.people.filter(p => this.canAssign(p, slot));
-            let isFallback = false;
             
-            // REQUIRED COVERAGE: If no one is available, we MUST still fill the slot randomly
+            // WEEKEND FAIRNESS: For weekend slots, also include people who marked it
+            // not preferred but are BELOW average on weekend shifts
+            // This ensures everyone gets equal weekend shifts regardless of preferences
+            if (slot.isWeekend && candidates.length < this.people.length) {
+                const avgLoad = this.calculateAverageLoad(currentLoad);
+                const weekendKey = slot.role === 'primary' ? 'weekend_primary' : 'weekend_secondary';
+                
+                for (const person of this.people) {
+                    // Skip if already a candidate
+                    if (candidates.find(c => c.email === person.email)) continue;
+                    
+                    // Skip if already has a shift on this day
+                    const sameDayShifts = this.getSameDayShifts(person, slot);
+                    if (sameDayShifts.length > 0) continue;
+                    
+                    // Include if below average on this weekend shift type
+                    const load = currentLoad.get(person.email);
+                    if (load[weekendKey] < avgLoad[weekendKey]) {
+                        candidates.push(person);
+                    }
+                }
+            }
+            
+            // REQUIRED COVERAGE: If no one is available, we MUST still fill the slot
             if (candidates.length === 0) {
                 console.warn(`No preferred candidates for slot ${slot.id} - using fallback for required coverage`);
                 
@@ -304,7 +340,6 @@ class OnCallScheduler {
                 
                 // Mark that this assignment was forced despite preferences
                 slot.warning = 'Assigned despite unavailable date - required coverage';
-                isFallback = true;
             }
 
             // Rank candidates by cost (lower is better)
@@ -315,20 +350,15 @@ class OnCallScheduler {
 
             let best;
             
-            if (isFallback) {
-                // For fallback assignments, add randomness among equally fair candidates
-                // Find all candidates with costs within a small threshold of the best
-                const bestCost = rankedCandidates[0].cost;
-                const threshold = 15; // Allow some variance for randomness
-                const equallyGood = rankedCandidates.filter(c => c.cost <= bestCost + threshold);
-                
-                // Randomly select from the equally good candidates
-                const randomIndex = Math.floor(Math.random() * equallyGood.length);
-                best = equallyGood[randomIndex];
-            } else {
-                // Normal assignment: pick the best candidate
-                best = rankedCandidates[0];
-            }
+            // Find all candidates within a fairness threshold of the best cost
+            const bestCost = rankedCandidates[0].cost;
+            const threshold = 15; // Allow some variance for randomness while maintaining fairness
+            const equallyGood = rankedCandidates.filter(c => c.cost <= bestCost + threshold);
+            
+            // ALWAYS randomly select among equally good candidates
+            // This ensures fairness when multiple people prefer the same date
+            const randomIndex = Math.floor(Math.random() * equallyGood.length);
+            best = equallyGood[randomIndex];
             
             slot.assignedPerson = best.person;
             slot.cost = best.cost;
