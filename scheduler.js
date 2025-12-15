@@ -160,39 +160,29 @@ class OnCallScheduler {
 
         // Calculate average load across all RAs for fairness comparison
         const avgLoad = this.calculateAverageLoad(currentLoad);
-
-        // Weekend fairness enforcement: heavily penalize assigning weekend shifts
-        // to people who already have more than average weekend shifts
-        if (slot.isWeekend) {
-            const weekendKey = slot.role === 'primary' ? 'weekend_primary' : 'weekend_secondary';
-            const personWeekendCount = load[weekendKey];
-            const avgWeekendCount = avgLoad[weekendKey];
-            
-            // Very heavy penalty if above average on weekends (forces equal distribution)
-            if (personWeekendCount > avgWeekendCount) {
-                cost += (personWeekendCount - avgWeekendCount) * 200;
-            }
-            // Strong bonus if below average on weekends (prioritizes catching up)
-            if (personWeekendCount < avgWeekendCount) {
-                cost -= (avgWeekendCount - personWeekendCount) * 100;
-            }
-            // Small base cost for weekends
-            cost += 5;
-        }
         
-        // Get this RA's current count for this shift type
+        // Get this RA's current count for this specific shift type
         const shiftType = this.getShiftTypeKey(slot);
         const personCount = load[shiftType];
         const avgCount = avgLoad[shiftType];
         
-        // Heavy penalty for being above average (encourages fairness)
+        // STRICT FAIRNESS ENFORCEMENT: Very heavy penalties/bonuses for ALL shift types
+        // This ensures equal distribution across weekday_primary, weekday_secondary,
+        // weekend_primary, and weekend_secondary regardless of preferences
+        
+        // Massive penalty if above average for this shift type (forces equal distribution)
         if (personCount > avgCount) {
-            cost += (personCount - avgCount) * 50;
+            cost += (personCount - avgCount) * 200;
         }
-
-        // Slight bonus for being below average
+        
+        // Strong bonus if below average for this shift type (prioritizes catching up)
         if (personCount < avgCount) {
-            cost -= (avgCount - personCount) * 10;
+            cost -= (avgCount - personCount) * 100;
+        }
+        
+        // Additional small base cost for weekend shifts
+        if (slot.isWeekend) {
+            cost += 5;
         }
 
         // Very heavy penalty for same-day double assignment (should be avoided)
@@ -300,12 +290,13 @@ class OnCallScheduler {
             // Get candidates who marked this date as available (not in notPreferred)
             let candidates = this.people.filter(p => this.canAssign(p, slot));
             
-            // WEEKEND FAIRNESS: For weekend slots, also include people who marked it
-            // not preferred but are BELOW average on weekend shifts
-            // This ensures everyone gets equal weekend shifts regardless of preferences
-            if (slot.isWeekend && candidates.length < this.people.length) {
+            // STRICT FAIRNESS: For ALL shift types, include people who marked the date
+            // as "not preferred" if they are BELOW average for this specific shift type.
+            // This ensures equal distribution across all four categories:
+            // weekday_primary, weekday_secondary, weekend_primary, weekend_secondary
+            if (candidates.length < this.people.length) {
                 const avgLoad = this.calculateAverageLoad(currentLoad);
-                const weekendKey = slot.role === 'primary' ? 'weekend_primary' : 'weekend_secondary';
+                const shiftTypeKey = this.getShiftTypeKey(slot);
                 
                 for (const person of this.people) {
                     // Skip if already a candidate
@@ -315,9 +306,9 @@ class OnCallScheduler {
                     const sameDayShifts = this.getSameDayShifts(person, slot);
                     if (sameDayShifts.length > 0) continue;
                     
-                    // Include if below average on this weekend shift type
+                    // Include if below average on this specific shift type
                     const load = currentLoad.get(person.email);
-                    if (load[weekendKey] < avgLoad[weekendKey]) {
+                    if (load[shiftTypeKey] < avgLoad[shiftTypeKey]) {
                         candidates.push(person);
                     }
                 }
