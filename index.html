@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>RAOD Scheduler - Northwestern University</title>
+        <link rel="stylesheet" href="styles.css">
+        <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+        <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    </head>
+
+    <body>
+        <div class="container">
+            <header class="northwestern-header">
+                <h1>RA Duty Scheduler - Main</h1>
+            </header>
+
+            <div id="sessionBar" class="session-bar">
+                <div class="session-info">
+                    <span id="sessionStatus" class="session-status offline">● No Active Session</span>
+                    <span id="sessionId" class="session-id"></span>
+                </div>
+                <div class="session-actions">
+                    <button class="btn btn-small btn-primary" onclick="startSession()" id="startSessionBtn">Start Session</button>
+                    <button class="btn btn-small btn-danger" onclick="endSession()" id="endSessionBtn" style="display: none;">End Session</button>
+                </div>
+            </div>
+
+            <nav class="tabs">
+                <button class="tab-btn active" data-tab="setup">Setup</button>
+                <button class="tab-btn" data-tab="collect">Collect Preferences</button>
+                <button class="tab-btn" data-tab="schedule">Generate Schedule</button>
+                <button class="tab-btn" data-tab="calendar">View Calendar</button>
+            </nav>
+
+            <section id="setup" class="tab-content active">
+                <div class="card">
+                    <h2>Dates</h2>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="startDate">Start Date</label>
+                            <input type="date" id="startDate" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="endDate">End Date</label>
+                            <input type="date" id="endDate" required>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Shifts</h2>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="primaryCount">Primary RAs per Night</label>
+                            <input type="number" id="primaryCount" min="1" max="10" value="2">
+                        </div>
+                        <div class="form-group">
+                            <label for="secondaryCount">Secondary RAs per Night</label>
+                            <input type="number" id="secondaryCount" min="1" max="10" value="2">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>RAs</h2>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="personName">Name</label>
+                            <input type="text" id="personName" placeholder="Jane Doe">
+                        </div>
+                        <div class="form-group">
+                            <label for="personEmail">Northwestern Email</label>
+                            <input type="email" id="personEmail" placeholder="jane2026@u.northwestern.edu">
+                        </div>
+                        <button class="btn btn-primary" onclick="addPerson()">Add RA</button>
+                    </div>
+
+                    <div id="peopleList" class="people-list">
+                    </div>
+                </div>
+            </section>
+
+            <section id="collect" class="tab-content">
+                <div class="card">
+                    <h2>Live Preferences</h2>
+                    <p>Start a live session and email the link to all RAs</p>
+                    
+                    <div id="sessionNotStarted" class="session-prompt">
+                        <h3>No Active Session</h3>
+                        <button class="btn btn-large btn-primary" onclick="startSession()">
+                            Start Live Session
+                        </button>
+                    </div>
+
+                    <div id="sessionActive" class="session-active" style="display: none;">
+                        <div class="session-header-info" style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <h3>Session Active</h3>
+                                <p class="session-code">Session ID: <strong id="displaySessionId"></strong></p>
+                            </div>
+                            <div style="margin-left: auto;">
+                                <button class="btn btn-secondary" onclick="copySessionLink()">Copy Link</button>
+                            </div>
+                        </div>
+
+                        <div class="card inner-card">
+                            <h4>Connected RAs: <span id="connectedCount">0</span></h4>
+                            <div id="connectedRAs" class="connected-list">
+                                <p class="muted">Waiting for RAs to connect...</p>
+                            </div>
+                        </div>
+
+                        <div class="card inner-card">
+                            <h4>Preferences Submitted</h4>
+                            <div id="submissionStatus" class="submission-status">
+                                <p class="muted">No preferences submitted yet.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+
+                <div class="card">
+                    <h2>Import Preferences</h2>
+                    <label class="btn btn-secondary" style="display: inline-block; margin-bottom: 1rem;">
+                        CSV File
+                        <input type="file" id="preferencesCSV" accept=".csv" onchange="importPreferencesCSV(event)" hidden>
+                    </label>
+
+                    <div id="preferenceSummary" class="preference-summary">
+                    </div>
+                </div>
+            </section>
+
+            <section id="schedule" class="tab-content">
+                <div class="card">
+                    <h2>Schedule</h2>                
+                    <div id="schedulePreview" class="schedule-preview">
+                    </div>
+
+                    <button class="btn btn-large btn-primary" onclick="generateSchedule()">
+                        Generate
+                    </button>
+
+                    <div id="scheduleResults" class="schedule-results">
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Fairness Report</h2>
+                    <div id="fairnessReport" class="fairness-report">
+                        <p class="muted">Generate a schedule to see the fairness report.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="calendar" class="tab-content">
+                <div class="card">
+                    <h2>Calendar</h2>
+                    
+                    <div class="calendar-controls">
+                        <div class="form-group">
+                            <label for="filterPerson">Filter by RA:</label>
+                            <select id="filterPerson" onchange="filterCalendar()">
+                                <option value="">All RAs</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="filterRole">Filter by Role:</label>
+                            <select id="filterRole" onchange="filterCalendar()">
+                                <option value="">All Roles</option>
+                                <option value="primary">Primary</option>
+                                <option value="secondary">Secondary</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="calendarLegend" class="legend">
+                    </div>
+
+                    <div id="calendarContainer"></div>
+                </div>
+
+                <div class="card">
+                    <h2>Export Preferences</h2>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="exportScheduleCSV()">CSV File</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>WhenToWork Preferences</h2>
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" onclick="exportForWhenToWork()">WhenToWork CSV File</button>
+                    </div>
+                    <div id="whentoworkHelper" style="display: none; margin-top: 1rem;">
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <script src="scheduler.js"></script>
+        <script src="session.js"></script>
+        <script src="app.js"></script>
+    </body>
+</html>

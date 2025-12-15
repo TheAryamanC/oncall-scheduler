@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>RA Duty Preferences - Northwestern University</title>
+        <link rel="stylesheet" href="styles.css">
+        <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+        <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+        <style>
+            .join-form {
+                max-width: 500px;
+                margin: 0 auto;
+            }
+            
+            .status-banner {
+                padding: 1rem;
+                border-radius: 8px;
+                margin-bottom: 1rem;
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+            }
+            
+            .status-banner.connecting {
+                background: #fef3c7;
+                border: 1px solid #f59e0b;
+                color: #92400e;
+            }
+            
+            .status-banner.connected {
+                background: #d1fae5;
+                border: 1px solid #10b981;
+                color: #065f46;
+            }
+            
+            .status-banner.error {
+                background: #fee2e2;
+                border: 1px solid #ef4444;
+                color: #991b1b;
+            }
+            
+            .status-banner.submitted {
+                background: #e0e7ff;
+                border: 1px solid var(--northwestern-purple);
+                color: var(--northwestern-purple);
+            }
+            
+            .calendar-picker {
+                margin: 1.5rem 0;
+            }
+            
+            .calendar-picker .fc {
+                max-width: 800px;
+                margin: 0 auto;
+            }
+            
+            .legend-inline {
+                display: flex;
+                gap: 1.5rem;
+                flex-wrap: wrap;
+                margin-bottom: 1rem;
+                justify-content: center;
+            }
+            
+            .legend-item {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+            
+            .legend-color {
+                width: 24px;
+                height: 24px;
+                border-radius: 4px;
+            }
+            
+            .legend-color.preferred {
+                background: #10b981;
+            }
+            
+            .legend-color.unavailable {
+                background: #ef4444;
+            }
+            
+            .legend-color.neutral {
+                background: #e5e7eb;
+            }
+            
+            .selection-summary {
+                background: #f8fafc;
+                padding: 1rem;
+                border-radius: 8px;
+                margin-top: 1rem;
+            }
+            
+            .selection-row {
+                display: flex;
+                gap: 2rem;
+                flex-wrap: wrap;
+            }
+            
+            .selection-col h4 {
+                margin: 0 0 0.5rem 0;
+                font-size: 0.9rem;
+            }
+            
+            .selection-col.preferred h4 {
+                color: #059669;
+            }
+            
+            .selection-col.unavailable h4 {
+                color: #dc2626;
+            }
+            
+            .date-list {
+                font-size: 0.85rem;
+                color: #64748b;
+                max-height: 100px;
+                overflow-y: auto;
+            }
+            
+            .submit-section {
+                text-align: center;
+                margin-top: 2rem;
+            }
+            
+            .success-message {
+                text-align: center;
+                padding: 3rem;
+            }
+            
+            .success-message .icon {
+                font-size: 4rem;
+                margin-bottom: 1rem;
+            }
+            
+            .fc-daygrid-day {
+                cursor: pointer;
+            }
+            
+            .fc-daygrid-day:hover {
+                background: #f1f5f9 !important;
+            }
+            
+            .fc-day-preferred {
+                background: rgba(16, 185, 129, 0.3) !important;
+            }
+            
+            .fc-day-unavailable {
+                background: rgba(239, 68, 68, 0.3) !important;
+            }
+            
+            .fc-day-past {
+                opacity: 0.5;
+                pointer-events: none;
+            }
+            
+            .fc-day-disabled {
+                background: #f3f4f6 !important;
+                cursor: not-allowed;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <header class="northwestern-header">
+                <h1>RA Duty Scheduler - Member</h1>
+            </header>
+
+            <section id="connectionSection">
+                <div class="card join-form">
+                    <h2>Join Session</h2>
+                    
+                    <div id="statusBanner" class="status-banner" style="display: none;">
+                        <span id="statusIcon"></span>
+                        <span id="statusText">Connecting...</span>
+                    </div>
+
+                    <div id="joinForm">
+                        <div class="form-group">
+                            <label for="sessionIdInput">Session ID</label>
+                            <input type="text" id="sessionIdInput" placeholder="RAOD-XXXXXX" style="text-transform: uppercase;">
+                        </div>
+                        <div class="form-group">
+                            <label for="nameInput">Your Name</label>
+                            <input type="text" id="nameInput" placeholder="Jane Doe">
+                        </div>
+                        <div class="form-group">
+                            <label for="emailInput">Your Northwestern Email</label>
+                            <input type="email" id="emailInput" placeholder="jane2026@u.northwestern.edu">
+                        </div>
+                        <button class="btn btn-large btn-primary" onclick="joinSession()" style="width: 100%; margin-top: 1rem;">
+                            Join
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section id="preferenceSection" style="display: none;">
+                <div class="card">
+                    <h2>Select Your Preferred Dates</h2>
+                    
+                    <div class="legend-inline">
+                        <div class="legend-item">
+                            <div class="legend-color preferred"></div>
+                            <span>Preferred</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color unavailable"></div>
+                            <span>Unavailable</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color neutral"></div>
+                            <span>Neutral</span>
+                        </div>
+                    </div>
+                    
+                    <div class="info-box">
+                        <strong>Instructions:</strong>
+                        <ul style="margin: 0.5rem 0 0 1.5rem;">
+                            <li><strong>First click</strong> = Preferred (green)</li>
+                            <li><strong>Second click</strong> = Unavailable (red)</li>
+                            <li><strong>Third click</strong> = Neutral/Clear</li>
+                        </ul>
+                    </div>
+
+                    <div class="calendar-picker">
+                        <div id="preferenceCalendar"></div>
+                    </div>
+
+                    <div class="selection-summary">
+                        <h3>Your Selections</h3>
+                        <div class="selection-row">
+                            <div class="selection-col preferred">
+                                <h4>Preferred Dates (<span id="preferredCount">0</span>)</h4>
+                                <div id="preferredList" class="date-list">None selected</div>
+                            </div>
+                            <div class="selection-col unavailable">
+                                <h4>Unavailable Dates (<span id="unavailableCount">0</span>)</h4>
+                                <div id="unavailableList" class="date-list">None selected</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="submit-section">
+                        <button class="btn btn-large btn-primary" onclick="submitPreferences()">
+                            Submit
+                        </button>
+                        <p class="muted" style="margin-top: 0.5rem;">
+                            You can re-submit to update your preferences while the session is active.
+                        </p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="successSection" style="display: none;">
+                <div class="card success-message">
+                    <h2>Preferences Submitted!</h2>
+                    <p class="muted">You can close this page or update your preferences by clicking below.</p>
+                    <button class="btn btn-secondary" onclick="showPreferenceSection()" style="margin-top: 1rem;">
+                        Update
+                    </button>
+                </div>
+            </section>
+
+            <section id="endedSection" style="display: none;">
+                <div class="card success-message">
+                    <h2>Session Ended</h2>
+                </div>
+            </section>
+        </div>
+
+        <script src="session.js"></script>
+        <script>
+            let memberSession = null;
+            let calendar = null;
+            let preferredDates = new Set();
+            let unavailableDates = new Set();
+            let schedulingPeriod = { start: null, end: null };
+
+            function getUrlParams() {
+                const params = new URLSearchParams(window.location.search);
+                return {
+                    session: params.get('session'),
+                    email: params.get('email'),
+                    name: params.get('name')
+                };
+            }
+
+            document.addEventListener('DOMContentLoaded', () => {
+                const params = getUrlParams();
+                
+                if (params.session) {
+                    document.getElementById('sessionIdInput').value = params.session;
+                }
+                if (params.email) {
+                    document.getElementById('emailInput').value = params.email;
+                }
+                if (params.name) {
+                    document.getElementById('nameInput').value = params.name;
+                }
+                
+                if (params.session && params.email && params.name) {
+                    joinSession();
+                }
+            });
+
+            function showStatus(type, icon, text) {
+                const banner = document.getElementById('statusBanner');
+                const iconEl = document.getElementById('statusIcon');
+                const textEl = document.getElementById('statusText');
+                
+                banner.className = `status-banner ${type}`;
+                iconEl.textContent = icon;
+                textEl.textContent = text;
+                banner.style.display = 'flex';
+            }
+
+            function joinSession() {
+                const sessionId = document.getElementById('sessionIdInput').value.trim().toUpperCase();
+                const name = document.getElementById('nameInput').value.trim();
+                const email = document.getElementById('emailInput').value.trim();
+
+                if (!sessionId || !name || !email) {
+                    alert('Please fill in all fields');
+                    return;
+                }
+
+                showStatus('connecting', '', 'Connecting to session...');
+
+                memberSession = new MemberSession();
+
+                memberSession.on('onConnected', () => {
+                    showStatus('connected', '', `Connected as ${name}`);
+                });
+
+                memberSession.on('onSessionInfo', (info) => {
+                    schedulingPeriod.start = info.startDate;
+                    schedulingPeriod.end = info.endDate;
+                    
+                    document.getElementById('connectionSection').style.display = 'none';
+                    document.getElementById('preferenceSection').style.display = 'block';
+                    
+                    initCalendar();
+                });
+
+                memberSession.on('onPreferencesAck', (success, message) => {
+                    if (success) {
+                        document.getElementById('preferenceSection').style.display = 'none';
+                        document.getElementById('successSection').style.display = 'block';
+                    } else {
+                        alert('Failed to submit preferences: ' + message);
+                    }
+                });
+
+                memberSession.on('onSessionEnded', (message) => {
+                    document.getElementById('connectionSection').style.display = 'none';
+                    document.getElementById('preferenceSection').style.display = 'none';
+                    document.getElementById('successSection').style.display = 'none';
+                    document.getElementById('endedSection').style.display = 'block';
+                });
+
+                memberSession.on('onError', (err) => {
+                    showStatus('error', '', err.message || 'Connection failed');
+                });
+
+                memberSession.on('onDisconnected', () => {
+                    showStatus('error', '', 'Disconnected from session');
+                });
+
+                memberSession.connect(sessionId, name, email)
+                    .catch(err => {
+                        showStatus('error', '', err.message || 'Failed to connect');
+                    });
+            }
+
+            function initCalendar() {
+                const calendarEl = document.getElementById('preferenceCalendar');
+                
+                calendar = new FullCalendar.Calendar(calendarEl, {
+                    initialView: 'dayGridMonth',
+                    initialDate: schedulingPeriod.start || new Date(),
+                    validRange: {
+                        start: schedulingPeriod.start,
+                        end: schedulingPeriod.end ? new Date(new Date(schedulingPeriod.end).getTime() + 86400000).toISOString().split('T')[0] : null
+                    },
+                    headerToolbar: {
+                        left: 'prev,next today',
+                        center: 'title',
+                        right: ''
+                    },
+                    selectable: false,
+                    dateClick: function(info) {
+                        handleDateClick(info.dateStr);
+                    },
+                    dayCellDidMount: function(info) {
+                        updateDayCell(info.el, info.dateStr);
+                    }
+                });
+                
+                calendar.render();
+            }
+
+            function handleDateClick(dateStr) {
+                if (preferredDates.has(dateStr)) {
+                    preferredDates.delete(dateStr);
+                    unavailableDates.add(dateStr);
+                } else if (unavailableDates.has(dateStr)) {
+                    unavailableDates.delete(dateStr);
+                } else {
+                    preferredDates.add(dateStr);
+                }
+                
+                updateCalendarDisplay();
+                updateSelectionSummary();
+            }
+
+            function updateCalendarDisplay() {
+                const dayCells = document.querySelectorAll('.fc-daygrid-day');
+                dayCells.forEach(cell => {
+                    const dateStr = cell.getAttribute('data-date');
+                    updateDayCell(cell, dateStr);
+                });
+            }
+
+            function updateDayCell(cell, dateStr) {
+                cell.classList.remove('fc-day-preferred', 'fc-day-unavailable');
+                
+                if (preferredDates.has(dateStr)) {
+                    cell.classList.add('fc-day-preferred');
+                } else if (unavailableDates.has(dateStr)) {
+                    cell.classList.add('fc-day-unavailable');
+                }
+            }
+
+            function updateSelectionSummary() {
+                const preferredList = Array.from(preferredDates).sort();
+                const unavailableList = Array.from(unavailableDates).sort();
+                
+                document.getElementById('preferredCount').textContent = preferredList.length;
+                document.getElementById('unavailableCount').textContent = unavailableList.length;
+                
+                document.getElementById('preferredList').textContent = 
+                    preferredList.length > 0 ? preferredList.join(', ') : 'None selected';
+                document.getElementById('unavailableList').textContent = 
+                    unavailableList.length > 0 ? unavailableList.join(', ') : 'None selected';
+            }
+
+            function submitPreferences() {
+                if (!memberSession) {
+                    alert('Not connected to session');
+                    return;
+                }
+
+                const preferred = Array.from(preferredDates);
+                const unavailable = Array.from(unavailableDates);
+
+                const success = memberSession.submitPreferences(preferred, unavailable);
+                
+                if (!success) {
+                    alert('Failed to submit - not connected to session');
+                }
+            }
+
+            function showPreferenceSection() {
+                document.getElementById('successSection').style.display = 'none';
+                document.getElementById('preferenceSection').style.display = 'block';
+            }
+        </script>
+    </body>
+</html>

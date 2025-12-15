@@ -1,0 +1,630 @@
+// Class to generate schedules
+class OnCallScheduler {
+    constructor() {
+        this.people = [];
+        this.dateRange = { start: null, end: null };
+        this.preferences = new Map();
+        this.schedule = [];
+        this.primaryCount = 2;
+        this.secondaryCount = 2;
+        this.primaryColors = [
+            '#1e40af', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7',
+            '#c084fc', '#d8b4fe', '#7c3aed', '#4f46e5', '#4338ca'
+        ];
+        this.secondaryColors = [
+            '#166534', '#22c55e', '#10b981', '#14b8a6', '#06b6d4',
+            '#0891b2', '#0e7490', '#155e75', '#059669', '#047857'
+        ];
+    }
+
+    // Set number of primary and secondary shifts per night
+    setShiftCounts(primaryCount, secondaryCount) {
+        this.primaryCount = Math.max(1, Math.min(10, primaryCount));
+        this.secondaryCount = Math.max(1, Math.min(10, secondaryCount));
+    }
+
+    // Add an RA to the scheduler
+    addPerson(name, email) {
+        if (this.people.find(p => p.email === email)) {
+            throw new Error(`Person with email ${email} already exists`);
+        }
+        this.people.push({ name, email, id: this.generateId() });
+        
+        // Initialize empty preferences for this RA
+        this.preferences.set(email, {
+            preferred: new Set(),
+            notPreferred: new Set()
+        });
+    }
+
+    // Remove an RA from the scheduler
+    removePerson(email) {
+        this.people = this.people.filter(p => p.email !== email);
+        this.preferences.delete(email);
+    }
+
+    // Set the date range
+    setDateRange(startDate, endDate) {
+        this.dateRange.start = new Date(startDate);
+        this.dateRange.end = new Date(endDate);
+        // Normalize to midnight
+        this.dateRange.start.setHours(0, 0, 0, 0);
+        this.dateRange.end.setHours(0, 0, 0, 0);
+    }
+
+    // Set preferences for an RA
+    setPreferences(email, preferred, notPreferred) {
+        if (!this.preferences.has(email)) {
+            throw new Error(`Person with email ${email} not found`);
+        }
+        this.preferences.set(email, {
+            preferred: new Set(preferred.map(d => this.normalizeDate(d))),
+            notPreferred: new Set(notPreferred.map(d => this.normalizeDate(d)))
+        });
+    }
+
+    // Generate all dates in the date range
+    generateDates() {
+        const dates = [];
+        const current = new Date(this.dateRange.start);
+        while (current <= this.dateRange.end) {
+            dates.push(new Date(current));
+            current.setDate(current.getDate() + 1);
+        }
+        return dates;
+    }
+
+    // Check if a date is a weekend night (Friday or Saturday)
+    isWeekendNight(date) {
+        const day = date.getDay();
+        return day === 5 || day === 6; // Friday = 5, Saturday = 6
+    }
+
+    // Get day name from date
+    getDayName(date) {
+        const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        return days[date.getDay()];
+    }
+
+    // Get slot label (a, b, c, ...) based on index
+    getSlotLabel(index) {
+        return String.fromCharCode(97 + index); // 97 = 'a'
+    }
+
+    // Generate all slots to be filled
+    generateSlots() {
+        const dates = this.generateDates();
+        const slots = [];
+
+        for (const date of dates) {
+            const isWeekend = this.isWeekendNight(date);
+            const dateStr = this.normalizeDate(date);
+
+            // Create primary shift slots
+            for (let i = 0; i < this.primaryCount; i++) {
+                const slotLabel = this.getSlotLabel(i);
+                slots.push({
+                    id: `${dateStr}-primary-${slotLabel}`,
+                    date: new Date(date),
+                    dateStr,
+                    role: 'primary',
+                    slot: slotLabel,
+                    slotIndex: i,
+                    isWeekend,
+                    duration: isWeekend ? 24 : 12, // Weekend primary = 24h
+                    assignedPerson: null
+                });
+            }
+
+            // Create secondary shift slots (always 12 hours)
+            for (let i = 0; i < this.secondaryCount; i++) {
+                const slotLabel = this.getSlotLabel(i);
+                slots.push({
+                    id: `${dateStr}-secondary-${slotLabel}`,
+                    date: new Date(date),
+                    dateStr,
+                    role: 'secondary',
+                    slot: slotLabel,
+                    slotIndex: i,
+                    isWeekend,
+                    duration: 12,
+                    assignedPerson: null
+                });
+            }
+        }
+
+        return slots;
+    }
+
+    // Check if an RA can be assigned to a slot based on preferences
+    canAssign(person, slot) {
+        const prefs = this.preferences.get(person.email);
+        if (prefs && prefs.notPreferred.has(slot.dateStr)) {
+            return false;
+        }
+        return true;
+    }
+
+    // Calculate cost for assigning a person to a slot - lower is better
+    calculateCost(person, slot, currentLoad) {
+        let cost = 0;
+        const prefs = this.preferences.get(person.email);
+        const load = currentLoad.get(person.email);
+
+        // Preference cost: preferred = 0, neutral = 10
+        if (prefs && prefs.preferred.has(slot.dateStr)) {
+            cost += 0;
+        } else {
+            cost += 10;
+        }
+
+        // Weekend shifts have slightly higher cost to distribute them fairly
+        if (slot.isWeekend) {
+            cost += 5;
+        }
+
+        // Calculate average load across all RAs for fairness comparison
+        const avgLoad = this.calculateAverageLoad(currentLoad);
+        
+        // Get this RA's current count for this shift type
+        const shiftType = this.getShiftTypeKey(slot);
+        const personCount = load[shiftType];
+        const avgCount = avgLoad[shiftType];
+        
+        // Heavy penalty for being above average (encourages fairness)
+        if (personCount > avgCount) {
+            cost += (personCount - avgCount) * 50;
+        }
+
+        // Slight bonus for being below average
+        if (personCount < avgCount) {
+            cost -= (avgCount - personCount) * 10;
+        }
+
+        // Very heavy penalty for same-day double assignment (should be avoided)
+        const sameDayShifts = this.getSameDayShifts(person, slot);
+        if (sameDayShifts.length > 0) {
+            cost += 1000;
+        }
+
+        return cost;
+    }
+
+    // Get key for shift type in load tracking
+    getShiftTypeKey(slot) {
+        const weekend = slot.isWeekend ? 'weekend' : 'weekday';
+        return `${weekend}_${slot.role}`;
+    }
+
+    // Initialize load tracking map
+    initializeLoad() {
+        const load = new Map();
+        for (const person of this.people) {
+            load.set(person.email, {
+                weekday_primary: 0,
+                weekend_primary: 0,
+                weekday_secondary: 0,
+                weekend_secondary: 0,
+                total_hours: 0
+            });
+        }
+        return load;
+    }
+
+    // Calculate average load across all RAs
+    calculateAverageLoad(currentLoad) {
+        const sum = {
+            weekday_primary: 0,
+            weekend_primary: 0,
+            weekday_secondary: 0,
+            weekend_secondary: 0
+        };
+        
+        for (const load of currentLoad.values()) {
+            sum.weekday_primary += load.weekday_primary;
+            sum.weekend_primary += load.weekend_primary;
+            sum.weekday_secondary += load.weekday_secondary;
+            sum.weekend_secondary += load.weekend_secondary;
+        }
+
+        const n = this.people.length;
+        return {
+            weekday_primary: sum.weekday_primary / n,
+            weekend_primary: sum.weekend_primary / n,
+            weekday_secondary: sum.weekday_secondary / n,
+            weekend_secondary: sum.weekend_secondary / n
+        };
+    }
+
+    // Get shifts assigned to a person on the same day as a slot
+    getSameDayShifts(person, slot) {
+        return this.schedule.filter(s => 
+            s.assignedPerson && 
+            s.assignedPerson.email === person.email && 
+            s.dateStr === slot.dateStr
+        );
+    }
+
+    // Main scheduling function
+    generateSchedule() {
+        const totalSlotsPerDay = this.primaryCount + this.secondaryCount;
+        
+        // Validate we have enough RAs
+        if (this.people.length < totalSlotsPerDay) {
+            throw new Error(
+                `Need at least ${totalSlotsPerDay} people to schedule ` +
+                `(${this.primaryCount} primary + ${this.secondaryCount} secondary per day)`
+            );
+        }
+
+        if (!this.dateRange.start || !this.dateRange.end) {
+            throw new Error('Date range not set');
+        }
+
+        // Generate all slots that need to be filled
+        const slots = this.generateSlots();
+        
+        // Initialize load tracking
+        const currentLoad = this.initializeLoad();
+        
+        // Clear previous schedule
+        this.schedule = [];
+
+        // Sort slots: prioritize harder-to-fill slots first
+        // Weekend and primary slots are typically harder to fill
+        slots.sort((a, b) => {
+            if (a.dateStr !== b.dateStr) {
+                return a.date - b.date;
+            }
+            const diffA = (a.isWeekend ? 10 : 0) + (a.role === 'primary' ? 5 : 0);
+            const diffB = (b.isWeekend ? 10 : 0) + (b.role === 'primary' ? 5 : 0);
+            return diffB - diffA;
+        });
+
+        // Assign each slot
+        for (const slot of slots) {
+            // Get candidates who marked this date as available (not in notPreferred)
+            let candidates = this.people.filter(p => this.canAssign(p, slot));
+            let isFallback = false;
+            
+            // REQUIRED COVERAGE: If no one is available, we MUST still fill the slot randomly
+            if (candidates.length === 0) {
+                console.warn(`No preferred candidates for slot ${slot.id} - using fallback for required coverage`);
+                
+                candidates = this.people.filter(p => {
+                    const sameDayShifts = this.getSameDayShifts(p, slot);
+                    return sameDayShifts.length === 0;
+                });
+                
+                if (candidates.length === 0) {
+                    throw new Error(
+                        `Cannot schedule slot ${slot.id}: all RAs are already assigned that day`
+                    );
+                }
+                
+                // Mark that this assignment was forced despite preferences
+                slot.warning = 'Assigned despite unavailable date - required coverage';
+                isFallback = true;
+            }
+
+            // Rank candidates by cost (lower is better)
+            const rankedCandidates = candidates.map(person => ({
+                person,
+                cost: this.calculateCost(person, slot, currentLoad)
+            })).sort((a, b) => a.cost - b.cost);
+
+            let best;
+            
+            if (isFallback) {
+                // For fallback assignments, add randomness among equally fair candidates
+                // Find all candidates with costs within a small threshold of the best
+                const bestCost = rankedCandidates[0].cost;
+                const threshold = 15; // Allow some variance for randomness
+                const equallyGood = rankedCandidates.filter(c => c.cost <= bestCost + threshold);
+                
+                // Randomly select from the equally good candidates
+                const randomIndex = Math.floor(Math.random() * equallyGood.length);
+                best = equallyGood[randomIndex];
+            } else {
+                // Normal assignment: pick the best candidate
+                best = rankedCandidates[0];
+            }
+            
+            slot.assignedPerson = best.person;
+            slot.cost = best.cost;
+
+            const load = currentLoad.get(best.person.email);
+            const shiftType = this.getShiftTypeKey(slot);
+            load[shiftType]++;
+            load.total_hours += slot.duration;
+
+            this.schedule.push(slot);
+        }
+
+        this.optimizeWithSwaps(currentLoad);
+
+        return {
+            schedule: this.schedule,
+            fairnessReport: this.generateFairnessReport(currentLoad)
+        };
+    }
+
+    // Optimize schedule by attempting swaps to improve fairness
+    optimizeWithSwaps(currentLoad) {
+        const maxIterations = 100;
+        let improved = true;
+        let iterations = 0;
+
+        while (improved && iterations < maxIterations) {
+            improved = false;
+            iterations++;
+
+            for (const slot of this.schedule) {
+                const currentPerson = slot.assignedPerson;
+                const currentCost = this.calculateCost(currentPerson, slot, currentLoad);
+
+                // Try swapping with each other RA
+                for (const person of this.people) {
+                    if (person.email === currentPerson.email) continue;
+                    if (!this.canAssign(person, slot)) continue;
+
+                    // Check for same-day conflicts
+                    const sameDayShifts = this.schedule.filter(s => 
+                        s.id !== slot.id &&
+                        s.assignedPerson && 
+                        s.assignedPerson.email === person.email && 
+                        s.dateStr === slot.dateStr
+                    );
+                    if (sameDayShifts.length > 0) continue;
+
+                    const swapCost = this.calculateCost(person, slot, currentLoad);
+
+                    // Only swap if significantly better (threshold of 20)
+                    if (swapCost < currentCost - 20) {
+                        // Update loads
+                        const oldLoad = currentLoad.get(currentPerson.email);
+                        const newLoad = currentLoad.get(person.email);
+                        const shiftType = this.getShiftTypeKey(slot);
+
+                        oldLoad[shiftType]--;
+                        oldLoad.total_hours -= slot.duration;
+                        newLoad[shiftType]++;
+                        newLoad.total_hours += slot.duration;
+
+                        slot.assignedPerson = person;
+                        slot.cost = swapCost;
+                        improved = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        console.log(`Optimization completed after ${iterations} iterations`);
+    }
+
+    // Generate fairness report
+    generateFairnessReport(currentLoad) {
+        const report = {
+            byPerson: [],
+            summary: {
+                totalShifts: this.schedule.length,
+                totalDays: this.generateDates().length,
+                weekendDays: this.generateDates().filter(d => this.isWeekendNight(d)).length
+            },
+            fairnessScore: 0
+        };
+
+        for (const person of this.people) {
+            const load = currentLoad.get(person.email);
+            const prefs = this.preferences.get(person.email);
+            
+            const assignedSlots = this.schedule.filter(s => 
+                s.assignedPerson && s.assignedPerson.email === person.email
+            );
+            
+            let preferredCount = 0;
+            let indifferentCount = 0;
+            let notPreferredCount = 0;
+            
+            for (const slot of assignedSlots) {
+                if (prefs.preferred.has(slot.dateStr)) {
+                    preferredCount++;
+                } else if (prefs.notPreferred.has(slot.dateStr)) {
+                    notPreferredCount++;
+                } else {
+                    indifferentCount++;
+                }
+            }
+
+            report.byPerson.push({
+                name: person.name,
+                email: person.email,
+                weekdayPrimary: load.weekday_primary,
+                weekendPrimary: load.weekend_primary,
+                weekdaySecondary: load.weekday_secondary,
+                weekendSecondary: load.weekend_secondary,
+                totalHours: load.total_hours,
+                totalShifts: assignedSlots.length,
+                preferredAssignments: preferredCount,
+                indifferentAssignments: indifferentCount,
+                notPreferredAssignments: notPreferredCount
+            });
+        }
+
+        const avgLoad = this.calculateAverageLoad(currentLoad);
+        let variance = 0;
+        for (const load of currentLoad.values()) {
+            variance += Math.pow(load.weekday_primary - avgLoad.weekday_primary, 2);
+            variance += Math.pow(load.weekend_primary - avgLoad.weekend_primary, 2);
+            variance += Math.pow(load.weekday_secondary - avgLoad.weekday_secondary, 2);
+            variance += Math.pow(load.weekend_secondary - avgLoad.weekend_secondary, 2);
+        }
+        variance /= (this.people.length * 4);
+        
+        report.fairnessScore = Math.max(0, Math.round(100 - variance * 10));
+        report.averageLoad = avgLoad;
+
+        return report;
+    }
+
+    // Normalize date to YYYY-MM-DD string
+    normalizeDate(date) {
+        if (typeof date === 'string') {
+            const d = new Date(date);
+            return d.toISOString().split('T')[0];
+        }
+        return date.toISOString().split('T')[0];
+    }
+
+    // Generate a unique ID
+    generateId() {
+        return 'id_' + Math.random().toString(36).substr(2, 9);
+    }
+
+    // Export schedule to CSV format
+    exportToCSV() {
+        const rows = [
+            ['Date', 'Day', 'Role', 'Slot', 'Weekend', 'Duration (hours)', 'Person Name', 'Person Email']
+        ];
+
+        for (const slot of this.schedule) {
+            rows.push([
+                slot.dateStr,
+                this.getDayName(slot.date),
+                slot.role,
+                slot.slot.toUpperCase(),
+                slot.isWeekend ? 'Yes' : 'No',
+                slot.duration,
+                slot.assignedPerson ? slot.assignedPerson.name : 'UNASSIGNED',
+                slot.assignedPerson ? slot.assignedPerson.email : ''
+            ]);
+        }
+
+        return rows.map(row => row.join(',')).join('\n');
+    }
+
+    // Get calendar events for display
+    getCalendarEvents(filterPerson = null, filterRole = null) {
+        return this.schedule
+            .filter(slot => {
+                if (filterPerson && (!slot.assignedPerson || slot.assignedPerson.email !== filterPerson)) {
+                    return false;
+                }
+                if (filterRole && slot.role !== filterRole) {
+                    return false;
+                }
+                return true;
+            })
+            .map(slot => {
+                const slotIndex = slot.slotIndex || 0;
+                let color;
+                if (slot.role === 'primary') {
+                    color = this.primaryColors[slotIndex % this.primaryColors.length];
+                } else {
+                    color = this.secondaryColors[slotIndex % this.secondaryColors.length];
+                }
+                
+                const startDate = new Date(slot.date);
+                startDate.setHours(20, 0, 0, 0);
+                
+                const endDate = new Date(startDate);
+                if (slot.isWeekend && slot.role === 'primary') {
+                    endDate.setDate(endDate.getDate() + 1);
+                    endDate.setHours(20, 0, 0, 0);
+                } else {
+                    endDate.setDate(endDate.getDate() + 1);
+                    endDate.setHours(8, 0, 0, 0);
+                }
+
+                return {
+                    id: slot.id,
+                    title: slot.assignedPerson ? 
+                        `${slot.assignedPerson.name} (${slot.role.charAt(0).toUpperCase()}${slot.slot.toUpperCase()})` :
+                        `UNASSIGNED (${slot.role.charAt(0).toUpperCase()}${slot.slot.toUpperCase()})`,
+                    start: slot.dateStr,
+                    backgroundColor: color,
+                    borderColor: slot.isWeekend ? '#fbbf24' : color,
+                    borderWidth: slot.isWeekend ? 3 : 1,
+                    extendedProps: {
+                        role: slot.role,
+                        slot: slot.slot,
+                        slotIndex: slotIndex,
+                        isWeekend: slot.isWeekend,
+                        duration: slot.duration,
+                        person: slot.assignedPerson
+                    }
+                };
+            });
+    }
+
+    // Export schedule in format for WhenToWork
+    exportForWhenToWork(teamName = 'RAOD') {
+        const rows = [
+            ['Date', 'Day', 'Start Time', 'End Time', 'Position', 'Employee Name', 'Employee Email']
+        ];
+
+        for (const slot of this.schedule) {
+            if (!slot.assignedPerson) continue;
+            
+            const startTime = '8:00 PM';
+            let endTime;
+            if (slot.isWeekend && slot.role === 'primary') {
+                endTime = '8:00 PM';
+            } else {
+                endTime = '8:00 AM';
+            }
+            
+            const position = `${teamName} - ${slot.role.charAt(0).toUpperCase() + slot.role.slice(1)} ${slot.slot.toUpperCase()}`;
+            
+            rows.push([
+                slot.dateStr,
+                this.getDayName(slot.date),
+                startTime,
+                endTime,
+                position,
+                slot.assignedPerson.name,
+                slot.assignedPerson.email
+            ]);
+        }
+
+        return rows.map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+    }
+
+    // Get shifts organized by week
+    getShiftsByWeek() {
+        const weeks = {};
+        
+        for (const slot of this.schedule) {
+            if (!slot.assignedPerson) continue;
+            
+            const date = new Date(slot.date);
+            const dayOfWeek = date.getDay();
+            const weekStart = new Date(date);
+            weekStart.setDate(date.getDate() - dayOfWeek);
+            const weekKey = this.normalizeDate(weekStart);
+            
+            if (!weeks[weekKey]) {
+                weeks[weekKey] = [];
+            }
+            
+            weeks[weekKey].push({
+                date: slot.dateStr,
+                dayName: this.getDayName(slot.date),
+                dayOfWeek: slot.date.getDay(),
+                role: slot.role,
+                slot: slot.slot,
+                isWeekend: slot.isWeekend,
+                startTime: '8:00 PM',
+                endTime: (slot.isWeekend && slot.role === 'primary') ? '8:00 PM' : '8:00 AM',
+                duration: slot.duration,
+                person: slot.assignedPerson
+            });
+        }
+        
+        return weeks;
+    }
+}
+
+// Export for use in browser
+window.OnCallScheduler = OnCallScheduler;
