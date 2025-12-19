@@ -43,10 +43,27 @@ class OnCallScheduler {
         this.preferences.delete(email);
     }
 
+    // Parse a date string as local time (not UTC)
+    // This fixes timezone issues where "2025-01-03" would be parsed as UTC midnight
+    parseLocalDate(dateStr) {
+        if (dateStr instanceof Date) {
+            return new Date(dateStr);
+        }
+        // Parse YYYY-MM-DD as local time by splitting and using Date constructor
+        const parts = String(dateStr).split('-');
+        if (parts.length === 3) {
+            return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        }
+        // Fallback: create date and normalize to local midnight
+        const d = new Date(dateStr);
+        d.setHours(0, 0, 0, 0);
+        return d;
+    }
+
     // Set the date range
     setDateRange(startDate, endDate) {
-        this.dateRange.start = new Date(startDate);
-        this.dateRange.end = new Date(endDate);
+        this.dateRange.start = this.parseLocalDate(startDate);
+        this.dateRange.end = this.parseLocalDate(endDate);
         // Normalize to midnight
         this.dateRange.start.setHours(0, 0, 0, 0);
         this.dateRange.end.setHours(0, 0, 0, 0);
@@ -745,13 +762,19 @@ class OnCallScheduler {
         return report;
     }
 
-    // Normalize date to YYYY-MM-DD string
+    // Normalize date to YYYY-MM-DD string using LOCAL time (not UTC)
     normalizeDate(date) {
+        let d;
         if (typeof date === 'string') {
-            const d = new Date(date);
-            return d.toISOString().split('T')[0];
+            d = this.parseLocalDate(date);
+        } else {
+            d = date;
         }
-        return date.toISOString().split('T')[0];
+        // Format as YYYY-MM-DD using local date components
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
     }
 
     // Generate a unique ID
