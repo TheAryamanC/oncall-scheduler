@@ -181,6 +181,7 @@ function runAllTests() {
                        TEST_CONFIGS.shiftCounts.length;
     
     console.log(`Running ${totalTests} test combinations...\n`);
+    console.log('Ignoring invalid configurations...\n');
     
     for (const teamSize of TEST_CONFIGS.teamSizes) {
         for (const dateRange of TEST_CONFIGS.dateRanges) {

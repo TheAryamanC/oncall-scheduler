@@ -26,6 +26,41 @@ class SessionManager {
         return result;
     }
 
+    // ICE server configuration for NAT traversal
+    // Uses free public STUN servers and metered.ca TURN servers for reliable connections
+    // For showing connections over restrictive NATs (e.g., GitHub Pages)
+    static getIceServers() {
+        return [
+            // Google's public STUN servers
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            // Twilio STUN
+            { urls: 'stun:global.stun.twilio.com:3478' },
+            // Free TURN servers from metered.ca (relay for restrictive NATs)
+            {
+                urls: 'turn:a.relay.metered.ca:80',
+                username: 'e8dd65c92c62d5e89c304882',
+                credential: 'uWdWNmkhvyqTEj3B'
+            },
+            {
+                urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+                username: 'e8dd65c92c62d5e89c304882',
+                credential: 'uWdWNmkhvyqTEj3B'
+            },
+            {
+                urls: 'turn:a.relay.metered.ca:443',
+                username: 'e8dd65c92c62d5e89c304882',
+                credential: 'uWdWNmkhvyqTEj3B'
+            },
+            {
+                urls: 'turn:a.relay.metered.ca:443?transport=tcp',
+                username: 'e8dd65c92c62d5e89c304882',
+                credential: 'uWdWNmkhvyqTEj3B'
+            }
+        ];
+    }
+
     // Start a new session as host
     startSession() {
         return new Promise((resolve, reject) => {
@@ -33,8 +68,12 @@ class SessionManager {
             this.isHost = true;
 
             // Create peer with session ID as the peer ID
+            // Include ICE servers for NAT traversal (required for GitHub Pages)
             this.peer = new Peer(this.sessionId, {
-                debug: 1
+                debug: 1,
+                config: {
+                    iceServers: SessionManager.getIceServers()
+                }
             });
 
             this.peer.on('open', (id) => {
@@ -316,8 +355,12 @@ class MemberSession {
             this.myInfo = { name, email };
 
             // Create peer with auto-generated ID (member doesn't need specific ID)
+            // Include ICE servers for NAT traversal (required for GitHub Pages)
             this.peer = new Peer(undefined, {
-                debug: 1
+                debug: 1,
+                config: {
+                    iceServers: SessionManager.getIceServers()
+                }
             });
 
             this.peer.on('open', (id) => {

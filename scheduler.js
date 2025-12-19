@@ -430,6 +430,9 @@ class OnCallScheduler {
         }
 
         this.optimizeWithSwaps(currentLoad, targets);
+        
+        // Final balancing pass to ensure even distribution
+        this.balanceShifts(currentLoad, targets);
 
         return {
             schedule: this.schedule,
@@ -504,8 +507,177 @@ class OnCallScheduler {
                 }
             }
         }
+    }
 
-        // console.log(`Optimization completed after ${iterations} iterations`);
+    // Final balancing pass: move shifts from people with more to people with fewer
+    // This ensures fair distribution even when initial assignment or swaps leave imbalance
+    balanceShifts(currentLoad, targets) {
+        const shiftTypes = ['weekday_primary', 'weekend_primary', 'weekday_secondary', 'weekend_secondary'];
+        
+        for (const shiftType of shiftTypes) {
+            let madeChange = true;
+            let iterations = 0;
+            const maxIterations = 500;
+            
+            while (madeChange && iterations < maxIterations) {
+                madeChange = false;
+                iterations++;
+                
+                // Get all people's counts for this shift type and find min/max
+                const counts = this.people.map(p => ({
+                    person: p,
+                    count: currentLoad.get(p.email)[shiftType]
+                }));
+                
+                const minCount = Math.min(...counts.map(c => c.count));
+                const maxCount = Math.max(...counts.map(c => c.count));
+                
+                // If difference is <= 1, distribution is as fair as possible
+                if (maxCount - minCount <= 1) {
+                    break;
+                }
+                
+                // Find people with max count (donors) and min count (recipients)
+                const donors = counts.filter(c => c.count === maxCount).map(c => c.person);
+                const recipients = counts.filter(c => c.count === minCount).map(c => c.person);
+                
+                // Strategy 1: Direct transfer (donor -> recipient)
+                let transferred = false;
+                for (const fromPerson of donors) {
+                    const slots = this.schedule.filter(s => 
+                        s.assignedPerson && 
+                        s.assignedPerson.email === fromPerson.email &&
+                        this.getShiftTypeKey(s) === shiftType
+                    );
+                    
+                    for (const slot of slots) {
+                        // Find a recipient who doesn't have a shift on this day
+                        const candidates = recipients.filter(p => {
+                            const sameDayShifts = this.schedule.filter(s => 
+                                s.id !== slot.id &&
+                                s.assignedPerson && 
+                                s.assignedPerson.email === p.email && 
+                                s.dateStr === slot.dateStr
+                            );
+                            return sameDayShifts.length === 0;
+                        }).sort((a, b) => {
+                            const prefsA = this.preferences.get(a.email);
+                            const prefsB = this.preferences.get(b.email);
+                            const scoreA = prefsA?.preferred.has(slot.dateStr) ? -1 : 
+                                          (prefsA?.notPreferred.has(slot.dateStr) ? 1 : 0);
+                            const scoreB = prefsB?.preferred.has(slot.dateStr) ? -1 : 
+                                          (prefsB?.notPreferred.has(slot.dateStr) ? 1 : 0);
+                            return scoreA - scoreB;
+                        });
+                        
+                        const toPerson = candidates.find(p => {
+                            const prefs = this.preferences.get(p.email);
+                            return !prefs?.notPreferred.has(slot.dateStr);
+                        }) || candidates[0];
+                        
+                        if (toPerson) {
+                            const fromLoad = currentLoad.get(fromPerson.email);
+                            const toLoad = currentLoad.get(toPerson.email);
+                            
+                            fromLoad[shiftType]--;
+                            fromLoad.total_hours -= slot.duration;
+                            toLoad[shiftType]++;
+                            toLoad.total_hours += slot.duration;
+                            
+                            slot.assignedPerson = toPerson;
+                            madeChange = true;
+                            transferred = true;
+                            break;
+                        }
+                    }
+                    if (transferred) break;
+                }
+                
+                // Strategy 2: Triangle swap (donor's slot to intermediary, intermediary's slot to recipient)
+                if (!transferred) {
+                    for (const donor of donors) {
+                        const donorSlots = this.schedule.filter(s => 
+                            s.assignedPerson && 
+                            s.assignedPerson.email === donor.email &&
+                            this.getShiftTypeKey(s) === shiftType
+                        );
+                        
+                        for (const donorSlot of donorSlots) {
+                            // Find an intermediary (someone not donor/recipient with same count as average)
+                            const avgCount = (minCount + maxCount) / 2;
+                            const intermediaries = this.people.filter(p => {
+                                const pCount = currentLoad.get(p.email)[shiftType];
+                                return p.email !== donor.email && 
+                                       !recipients.some(r => r.email === p.email) &&
+                                       pCount >= minCount && pCount <= maxCount;
+                            });
+                            
+                            for (const intermediary of intermediaries) {
+                                // Check if intermediary can take donor's slot (no same-day conflict)
+                                const intHasConflict = this.schedule.some(s => 
+                                    s.id !== donorSlot.id &&
+                                    s.assignedPerson && 
+                                    s.assignedPerson.email === intermediary.email && 
+                                    s.dateStr === donorSlot.dateStr
+                                );
+                                if (intHasConflict) continue;
+                                
+                                // Find a slot from intermediary that a recipient can take
+                                const intSlots = this.schedule.filter(s => 
+                                    s.assignedPerson && 
+                                    s.assignedPerson.email === intermediary.email &&
+                                    this.getShiftTypeKey(s) === shiftType &&
+                                    s.dateStr !== donorSlot.dateStr  // Different day
+                                );
+                                
+                                for (const intSlot of intSlots) {
+                                    // Find a recipient who can take this slot
+                                    const recipient = recipients.find(p => {
+                                        const recHasConflict = this.schedule.some(s => 
+                                            s.id !== intSlot.id &&
+                                            s.assignedPerson && 
+                                            s.assignedPerson.email === p.email && 
+                                            s.dateStr === intSlot.dateStr
+                                        );
+                                        return !recHasConflict;
+                                    });
+                                    
+                                    if (recipient) {
+                                        // Perform the triangle swap
+                                        // 1. Donor's slot -> Intermediary
+                                        // 2. Intermediary's slot -> Recipient
+                                        const donorLoad = currentLoad.get(donor.email);
+                                        const intLoad = currentLoad.get(intermediary.email);
+                                        const recLoad = currentLoad.get(recipient.email);
+                                        
+                                        // Move donor's slot to intermediary
+                                        donorLoad[shiftType]--;
+                                        donorLoad.total_hours -= donorSlot.duration;
+                                        intLoad[shiftType]++;
+                                        intLoad.total_hours += donorSlot.duration;
+                                        donorSlot.assignedPerson = intermediary;
+                                        
+                                        // Move intermediary's slot to recipient
+                                        intLoad[shiftType]--;
+                                        intLoad.total_hours -= intSlot.duration;
+                                        recLoad[shiftType]++;
+                                        recLoad.total_hours += intSlot.duration;
+                                        intSlot.assignedPerson = recipient;
+                                        
+                                        madeChange = true;
+                                        transferred = true;
+                                        break;
+                                    }
+                                }
+                                if (transferred) break;
+                            }
+                            if (transferred) break;
+                        }
+                        if (transferred) break;
+                    }
+                }
+            }
+        }
     }
 
     // Generate fairness report
