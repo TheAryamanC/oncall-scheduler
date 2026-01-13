@@ -181,20 +181,34 @@ class OnCallScheduler {
         const shiftType = this.getShiftTypeKey(slot);
         const personCount = load[shiftType];
         const target = targets ? targets[shiftType] : null;
+        const totalTarget = targets ? targets.total_shifts : null;
         
-        // FAIRNESS IS THE PRIMARY FACTOR
-        // The cost is primarily based on how many shifts this person already has
-        // in this category - people with fewer shifts get MUCH lower costs
+        // TOTAL SHIFT FAIRNESS IS THE HIGHEST PRIORITY
+        // This ensures that everyone ends up with roughly the same TOTAL shifts,
+        // not just balanced within each category
+        if (totalTarget) {
+            // Extremely heavy penalty if at or above total max
+            if (load.total_shifts >= totalTarget.max) {
+                cost += 500000;
+            } else {
+                // Primary cost based on total shifts - highest weight
+                // This DOMINATES all other factors to ensure total fairness
+                cost += load.total_shifts * 2000;
+            }
+        }
+        
+        // CATEGORY FAIRNESS IS THE SECONDARY FACTOR
+        // The cost is based on how many shifts this person already has
+        // in this category - people with fewer shifts get lower costs
         
         if (target) {
             // Very heavy penalty if at or above max (effectively blocks them)
             if (personCount >= target.max) {
                 cost += 100000;
             } else {
-                // Primary cost = current count * 1000
+                // Secondary cost = current count * 1000
                 // This means someone with 0 shifts has cost 0, 
                 // someone with 1 shift has cost 1000, etc.
-                // This DOMINATES all other factors
                 cost += personCount * 1000;
                 
                 // Additional penalty if at or above minimum (others should catch up)
@@ -241,6 +255,7 @@ class OnCallScheduler {
                 weekend_primary: 0,
                 weekday_secondary: 0,
                 weekend_secondary: 0,
+                total_shifts: 0,
                 total_hours: 0
             });
         }
@@ -288,6 +303,9 @@ class OnCallScheduler {
         const weekendCount = dates.filter(d => this.isWeekendNight(d)).length;
         const n = this.people.length;
         
+        // Total shifts across all categories
+        const totalSlots = (weekdayCount + weekendCount) * (this.primaryCount + this.secondaryCount);
+        
         return {
             weekday_primary: {
                 total: weekdayCount * this.primaryCount,
@@ -308,6 +326,11 @@ class OnCallScheduler {
                 total: weekendCount * this.secondaryCount,
                 min: Math.floor((weekendCount * this.secondaryCount) / n),
                 max: Math.ceil((weekendCount * this.secondaryCount) / n)
+            },
+            total_shifts: {
+                total: totalSlots,
+                min: Math.floor(totalSlots / n),
+                max: Math.ceil(totalSlots / n)
             }
         };
     }
@@ -393,14 +416,26 @@ class OnCallScheduler {
             }
 
             // FAIRNESS-FIRST SELECTION
-            // Step 1: Find the minimum shift count for this category among candidates
-            const minShiftCount = Math.min(...candidates.map(p => 
+            // Step 1: Find the minimum TOTAL shift count among candidates
+            // This ensures overall fairness across all shift types
+            const minTotalShifts = Math.min(...candidates.map(p => 
+                currentLoad.get(p.email).total_shifts
+            ));
+            
+            // Step 2: Filter to candidates with minimum total shifts (or within 1)
+            // This ensures we prioritize people with fewer total shifts
+            let totalFairCandidates = candidates.filter(p => 
+                currentLoad.get(p.email).total_shifts <= minTotalShifts + 1
+            );
+            
+            // Step 3: Among those, find the minimum category shift count
+            const minShiftCount = Math.min(...totalFairCandidates.map(p => 
                 currentLoad.get(p.email)[shiftTypeKey]
             ));
             
-            // Step 2: ONLY consider candidates at the minimum shift count
+            // Step 4: ONLY consider candidates at the minimum category shift count
             // This ensures fairness - we MUST give shifts to those who have fewer
-            let fairCandidates = candidates.filter(p => 
+            let fairCandidates = totalFairCandidates.filter(p => 
                 currentLoad.get(p.email)[shiftTypeKey] === minShiftCount
             );
             
@@ -441,6 +476,7 @@ class OnCallScheduler {
 
             const load = currentLoad.get(best.person.email);
             load[shiftTypeKey]++;
+            load.total_shifts++;
             load.total_hours += slot.duration;
 
             this.schedule.push(slot);
@@ -512,8 +548,10 @@ class OnCallScheduler {
                     if (swapCost < currentCost - 20) {
                         // Update loads
                         currentPersonLoad[shiftType]--;
+                        currentPersonLoad.total_shifts--;
                         currentPersonLoad.total_hours -= slot.duration;
                         newPersonLoad[shiftType]++;
+                        newPersonLoad.total_shifts++;
                         newPersonLoad.total_hours += slot.duration;
 
                         slot.assignedPerson = person;
@@ -597,8 +635,10 @@ class OnCallScheduler {
                             const toLoad = currentLoad.get(toPerson.email);
                             
                             fromLoad[shiftType]--;
+                            fromLoad.total_shifts--;
                             fromLoad.total_hours -= slot.duration;
                             toLoad[shiftType]++;
+                            toLoad.total_shifts++;
                             toLoad.total_hours += slot.duration;
                             
                             slot.assignedPerson = toPerson;
@@ -669,15 +709,19 @@ class OnCallScheduler {
                                         
                                         // Move donor's slot to intermediary
                                         donorLoad[shiftType]--;
+                                        donorLoad.total_shifts--;
                                         donorLoad.total_hours -= donorSlot.duration;
                                         intLoad[shiftType]++;
+                                        intLoad.total_shifts++;
                                         intLoad.total_hours += donorSlot.duration;
                                         donorSlot.assignedPerson = intermediary;
                                         
                                         // Move intermediary's slot to recipient
                                         intLoad[shiftType]--;
+                                        intLoad.total_shifts--;
                                         intLoad.total_hours -= intSlot.duration;
                                         recLoad[shiftType]++;
+                                        recLoad.total_shifts++;
                                         recLoad.total_hours += intSlot.duration;
                                         intSlot.assignedPerson = recipient;
                                         
@@ -692,6 +736,219 @@ class OnCallScheduler {
                         }
                         if (transferred) break;
                     }
+                }
+            }
+        }
+        
+        // FINAL PASS: Balance total shifts across all people
+        // This addresses the issue where variance in each category can compound
+        this.balanceTotalShifts(currentLoad, targets);
+    }
+
+    // Balance total shifts to ensure everyone has roughly the same total
+    // This is critical because variance of 1 in each of 4 categories can compound to 4 total
+    balanceTotalShifts(currentLoad, targets) {
+        let madeChange = true;
+        let iterations = 0;
+        const maxIterations = 500;
+        
+        while (madeChange && iterations < maxIterations) {
+            madeChange = false;
+            iterations++;
+            
+            // Get all people's total shift counts
+            const counts = this.people.map(p => ({
+                person: p,
+                totalShifts: currentLoad.get(p.email).total_shifts
+            }));
+            
+            const minTotal = Math.min(...counts.map(c => c.totalShifts));
+            const maxTotal = Math.max(...counts.map(c => c.totalShifts));
+            
+            // If difference is <= 1, distribution is as fair as possible
+            if (maxTotal - minTotal <= 1) {
+                break;
+            }
+            
+            // Find people with max total (donors) and min total (recipients)
+            const donors = counts.filter(c => c.totalShifts === maxTotal).map(c => c.person);
+            const recipients = counts.filter(c => c.totalShifts === minTotal).map(c => c.person);
+            
+            // Try to move any shift from a donor to a recipient
+            let transferred = false;
+            
+            for (const fromPerson of donors) {
+                // Get all shifts assigned to this donor
+                const donorSlots = this.schedule.filter(s => 
+                    s.assignedPerson && s.assignedPerson.email === fromPerson.email
+                );
+                
+                for (const slot of donorSlots) {
+                    const shiftType = this.getShiftTypeKey(slot);
+                    const fromLoad = currentLoad.get(fromPerson.email);
+                    const target = targets[shiftType];
+                    
+                    // Don't take if it would put donor below min for this category
+                    if (fromLoad[shiftType] <= target.min) continue;
+                    
+                    // Find a recipient who:
+                    // 1. Doesn't have a shift on this day
+                    // 2. Won't exceed max for this category
+                    const candidates = recipients.filter(p => {
+                        const toLoad = currentLoad.get(p.email);
+                        // Check category max
+                        if (toLoad[shiftType] >= target.max) return false;
+                        
+                        // Check no same-day conflict
+                        const sameDayShifts = this.schedule.filter(s => 
+                            s.id !== slot.id &&
+                            s.assignedPerson && 
+                            s.assignedPerson.email === p.email && 
+                            s.dateStr === slot.dateStr
+                        );
+                        return sameDayShifts.length === 0;
+                    }).sort((a, b) => {
+                        // Prefer recipients who prefer this date
+                        const prefsA = this.preferences.get(a.email);
+                        const prefsB = this.preferences.get(b.email);
+                        const scoreA = prefsA?.preferred.has(slot.dateStr) ? -1 : 
+                                      (prefsA?.notPreferred.has(slot.dateStr) ? 1 : 0);
+                        const scoreB = prefsB?.preferred.has(slot.dateStr) ? -1 : 
+                                      (prefsB?.notPreferred.has(slot.dateStr) ? 1 : 0);
+                        return scoreA - scoreB;
+                    });
+                    
+                    // Try to find a candidate who doesn't have this day as not-preferred
+                    let toPerson = candidates.find(p => {
+                        const prefs = this.preferences.get(p.email);
+                        return !prefs?.notPreferred.has(slot.dateStr);
+                    });
+                    
+                    // If none found, take any candidate
+                    if (!toPerson && candidates.length > 0) {
+                        toPerson = candidates[0];
+                    }
+                    
+                    if (toPerson) {
+                        const toLoad = currentLoad.get(toPerson.email);
+                        
+                        // Perform the transfer
+                        fromLoad[shiftType]--;
+                        fromLoad.total_shifts--;
+                        fromLoad.total_hours -= slot.duration;
+                        toLoad[shiftType]++;
+                        toLoad.total_shifts++;
+                        toLoad.total_hours += slot.duration;
+                        
+                        slot.assignedPerson = toPerson;
+                        madeChange = true;
+                        transferred = true;
+                        break;
+                    }
+                }
+                if (transferred) break;
+            }
+            
+            // If direct transfer failed, try cross-category triangle swap
+            if (!transferred) {
+                for (const donor of donors) {
+                    // Get all donor's slots
+                    const donorSlots = this.schedule.filter(s => 
+                        s.assignedPerson && s.assignedPerson.email === donor.email
+                    );
+                    
+                    for (const donorSlot of donorSlots) {
+                        const shiftType = this.getShiftTypeKey(donorSlot);
+                        const fromLoad = currentLoad.get(donor.email);
+                        const target = targets[shiftType];
+                        
+                        // Skip if removing would violate category min
+                        if (fromLoad[shiftType] <= target.min) continue;
+                        
+                        // Find an intermediary who can take this slot and give up a different one
+                        const intermediaries = this.people.filter(p => {
+                            if (p.email === donor.email) return false;
+                            if (recipients.some(r => r.email === p.email)) return false;
+                            
+                            const pLoad = currentLoad.get(p.email);
+                            // Can't be at max for this shift type
+                            if (pLoad[shiftType] >= targets[shiftType].max) return false;
+                            
+                            // Must not have conflict on donor's date
+                            const hasConflict = this.schedule.some(s => 
+                                s.id !== donorSlot.id &&
+                                s.assignedPerson && 
+                                s.assignedPerson.email === p.email && 
+                                s.dateStr === donorSlot.dateStr
+                            );
+                            return !hasConflict;
+                        });
+                        
+                        for (const intermediary of intermediaries) {
+                            // Find a slot from intermediary that a recipient can take
+                            const intSlots = this.schedule.filter(s => 
+                                s.assignedPerson && 
+                                s.assignedPerson.email === intermediary.email &&
+                                s.dateStr !== donorSlot.dateStr
+                            );
+                            
+                            for (const intSlot of intSlots) {
+                                const intShiftType = this.getShiftTypeKey(intSlot);
+                                const intTarget = targets[intShiftType];
+                                const intLoad = currentLoad.get(intermediary.email);
+                                
+                                // Skip if would put intermediary below min for this category
+                                if (intLoad[intShiftType] <= intTarget.min) continue;
+                                
+                                // Find a recipient who can take this slot
+                                const recipient = recipients.find(p => {
+                                    const recLoad = currentLoad.get(p.email);
+                                    // Can't be at max for this shift type
+                                    if (recLoad[intShiftType] >= intTarget.max) return false;
+                                    
+                                    // Must not have conflict on intermediary's slot date
+                                    const hasConflict = this.schedule.some(s => 
+                                        s.id !== intSlot.id &&
+                                        s.assignedPerson && 
+                                        s.assignedPerson.email === p.email && 
+                                        s.dateStr === intSlot.dateStr
+                                    );
+                                    return !hasConflict;
+                                });
+                                
+                                if (recipient) {
+                                    const donorLoad = currentLoad.get(donor.email);
+                                    const recLoad = currentLoad.get(recipient.email);
+                                    
+                                    // Donor's slot -> Intermediary (no net change for intermediary)
+                                    donorLoad[shiftType]--;
+                                    donorLoad.total_shifts--;
+                                    donorLoad.total_hours -= donorSlot.duration;
+                                    intLoad[shiftType]++;
+                                    intLoad.total_hours += donorSlot.duration;
+                                    // Note: intermediary total_shifts stays same
+                                    donorSlot.assignedPerson = intermediary;
+                                    
+                                    // Intermediary's slot -> Recipient
+                                    intLoad[intShiftType]--;
+                                    intLoad.total_hours -= intSlot.duration;
+                                    // intermediary loses one total (from intSlot)
+                                    // but gained one (from donorSlot), so net 0
+                                    recLoad[intShiftType]++;
+                                    recLoad.total_shifts++;
+                                    recLoad.total_hours += intSlot.duration;
+                                    intSlot.assignedPerson = recipient;
+                                    
+                                    madeChange = true;
+                                    transferred = true;
+                                    break;
+                                }
+                            }
+                            if (transferred) break;
+                        }
+                        if (transferred) break;
+                    }
+                    if (transferred) break;
                 }
             }
         }
@@ -856,39 +1113,6 @@ class OnCallScheduler {
                     }
                 };
             });
-    }
-
-    // Export schedule in format for WhenToWork
-    exportForWhenToWork(teamName = 'RAOD') {
-        const rows = [
-            ['Date', 'Day', 'Start Time', 'End Time', 'Position', 'Employee Name', 'Employee Email']
-        ];
-
-        for (const slot of this.schedule) {
-            if (!slot.assignedPerson) continue;
-            
-            const startTime = '8:00 PM';
-            let endTime;
-            if (slot.isWeekend && slot.role === 'primary') {
-                endTime = '8:00 PM';
-            } else {
-                endTime = '8:00 AM';
-            }
-            
-            const position = `${teamName} - ${slot.role.charAt(0).toUpperCase() + slot.role.slice(1)} ${slot.slot.toUpperCase()}`;
-            
-            rows.push([
-                slot.dateStr,
-                this.getDayName(slot.date),
-                startTime,
-                endTime,
-                position,
-                slot.assignedPerson.name,
-                slot.assignedPerson.email
-            ]);
-        }
-
-        return rows.map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
     }
 
     // Get shifts organized by week

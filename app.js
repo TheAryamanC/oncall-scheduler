@@ -683,18 +683,6 @@ function exportScheduleCSV() {
     downloadFile('oncall-schedule.csv', scheduler.exportToCSV(), 'text/csv');
 }
 
-// Export schedule for WhenToWork - this should be modified and can be imported to W2W and all shifts will be added
-function exportForWhenToWork() {
-    if (scheduler.schedule.length === 0) {
-        alert('No schedule to export. Generate a schedule first.');
-        return;
-    }
-    
-    const teamName = document.getElementById('w2wTeamName')?.value || 'On-Call';
-    const csv = scheduler.exportForWhenToWork(teamName);
-    downloadFile('whentowork-shifts.csv', csv, 'text/csv');
-}
-
 // Utility function to escape HTML
 function escapeHtml(str) {
     if (!str) return '';
