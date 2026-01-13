@@ -7,4 +7,4 @@ Notes:
    - Preferred dates are prioritized as best as possible
    - Equal distribution of shift types are ensured as best as possible (max variance is 1)
 
-Found at: https://thearyamanc.github.io/oncall-scheduler/
+**Try it live:** https://thearyamanc.github.io/duty-scheduler/
