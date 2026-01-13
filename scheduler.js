@@ -5,8 +5,8 @@ class OnCallScheduler {
         this.dateRange = { start: null, end: null };
         this.preferences = new Map();
         this.schedule = [];
-        this.primaryCount = 2;
-        this.secondaryCount = 2;
+        this.primaryCount = 1;
+        this.secondaryCount = 1;
         this.primaryColors = [
             '#1e40af', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7',
             '#c084fc', '#d8b4fe', '#7c3aed', '#4f46e5', '#4338ca'
@@ -19,8 +19,8 @@ class OnCallScheduler {
 
     // Set number of primary and secondary shifts per night
     setShiftCounts(primaryCount, secondaryCount) {
-        this.primaryCount = Math.max(1, Math.min(10, primaryCount));
-        this.secondaryCount = Math.max(1, Math.min(10, secondaryCount));
+        this.primaryCount = Math.max(0, Math.min(10, primaryCount));
+        this.secondaryCount = Math.max(0, Math.min(10, secondaryCount));
     }
 
     // Add an RA to the scheduler

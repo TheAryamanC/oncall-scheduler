@@ -17,7 +17,7 @@ const TEST_CONFIGS = {
         { weeks: 26, label: '6 months' },
         { weeks: 52, label: '12 months' }
     ],
-    shiftCounts: [1, 2, 3, 5, 10]
+    shiftCounts: [0, 1, 2, 3, 5, 10]
 };
 
 // Test result tracking
@@ -273,6 +273,10 @@ function runQuickTest() {
         { teamSize: 5, weeks: 52, primaryCount: 1, secondaryCount: 1 }, // Long range, small team
         { teamSize: 50, weeks: 1, primaryCount: 10, secondaryCount: 10 }, // Large team, short range
         { teamSize: 10, weeks: 4, primaryCount: 5, secondaryCount: 4 }, // Max shifts for team
+        // Zero RA tests
+        { teamSize: 5, weeks: 2, primaryCount: 0, secondaryCount: 1 }, // No primary RAs
+        { teamSize: 5, weeks: 2, primaryCount: 1, secondaryCount: 0 }, // No secondary RAs
+        { teamSize: 5, weeks: 2, primaryCount: 0, secondaryCount: 0 }, // No RAs at all
     ];
     
     for (const config of quickConfigs) {

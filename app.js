@@ -59,8 +59,10 @@ function initializeShiftCounts() {
 
 // Update shift counts in scheduler
 function updateShiftCounts() {
-    const primaryCount = parseInt(document.getElementById('primaryCount').value) || 2;
-    const secondaryCount = parseInt(document.getElementById('secondaryCount').value) || 2;
+    const primaryParsed = parseInt(document.getElementById('primaryCount').value);
+    const secondaryParsed = parseInt(document.getElementById('secondaryCount').value);
+    const primaryCount = isNaN(primaryParsed) ? 1 : primaryParsed;
+    const secondaryCount = isNaN(secondaryParsed) ? 1 : secondaryParsed;
     scheduler.setShiftCounts(primaryCount, secondaryCount);
     saveSetup();
 }
@@ -170,11 +172,13 @@ function renderPeopleList() {
 
 // Save current setup to localStorage - in case browser restarts
 function saveSetup() {
+    const primaryParsed = parseInt(document.getElementById('primaryCount').value);
+    const secondaryParsed = parseInt(document.getElementById('secondaryCount').value);
     const data = {
         startDate: document.getElementById('startDate').value,
         endDate: document.getElementById('endDate').value,
-        primaryCount: parseInt(document.getElementById('primaryCount').value) || 2,
-        secondaryCount: parseInt(document.getElementById('secondaryCount').value) || 2,
+        primaryCount: isNaN(primaryParsed) ? 1 : primaryParsed,
+        secondaryCount: isNaN(secondaryParsed) ? 1 : secondaryParsed,
         people: scheduler.people,
         preferences: Array.from(scheduler.preferences.entries()).map(([email, prefs]) => ({
             email,
@@ -202,10 +206,10 @@ function loadSetup() {
         }
         updateDateRange();
 
-        if (data.primaryCount) {
+        if (data.primaryCount !== undefined && data.primaryCount !== null) {
             document.getElementById('primaryCount').value = data.primaryCount;
         }
-        if (data.secondaryCount) {
+        if (data.secondaryCount !== undefined && data.secondaryCount !== null) {
             document.getElementById('secondaryCount').value = data.secondaryCount;
         }
         updateShiftCounts();
